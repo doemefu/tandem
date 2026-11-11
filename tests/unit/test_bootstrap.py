@@ -33,9 +33,16 @@ def test_main_rejects_unknown_role(monkeypatch, capsys) -> None:
 
 
 def test_main_accepts_both_roles(monkeypatch) -> None:
+    started: list[str] = []
+
+    async def fake_serve(cfg: object) -> None:
+        started.append("served")  # pragma: no cover - assertion happens outside
+
+    monkeypatch.setattr(tandem_main, "_serve", fake_serve)
     for role in ROLES:
         monkeypatch.setenv("TANDEM_ROLE", role)
         assert tandem_main.main() == 0
+    assert started == ["served", "served"]
 
 
 def test_usage_limit_fixture_pins_the_result_contract() -> None:
