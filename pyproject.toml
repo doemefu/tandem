@@ -1,0 +1,39 @@
+[project]
+name = "tandem"
+version = "0.0.1"
+description = "Two-agent bridge: Claude Code thinks and decides, Mistral Vibe implements"
+requires-python = "==3.13.*"
+license = "MIT"
+dependencies = [
+    "mcp==2.3.0",
+]
+
+[dependency-groups]
+dev = [
+    "ruff==0.16.9",
+    "mypy==2.3.1",
+    "pytest==9.1.1",
+]
+
+[tool.uv]
+# No build backend: run from src/ via PYTHONPATH, like homelab-mcp-hub.
+package = false
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "N", "SIM", "RUF", "ASYNC", "PT"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+
+[tool.mypy]
+strict = true
+python_version = "3.13"
+mypy_path = "src"
