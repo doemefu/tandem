@@ -91,6 +91,9 @@ def _success_stdout(cost: float = 0.1245, session_id: str = SID) -> bytes:
     payload: dict[str, Any] = json.loads((FIXTURES / "claude_print_success.json").read_text())
     payload["total_cost_usd"] = cost
     payload["session_id"] = session_id
+    # The fixture pins the result-object shape (a live capture); the answer
+    # text is test data - a decide-mode answer with the DECISION line.
+    payload["result"] = f"1. Analysis: wall and happy paths covered by live probes.\n\nDECISION: {DECISION_TEXT}"
     return json.dumps(payload).encode()
 
 

@@ -29,6 +29,7 @@ select = ["E", "F", "W", "I", "B", "UP", "S", "N", "SIM", "RUF", "ASYNC", "PT"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S603", "ASYNC240"]  # test fakes replicate blocking child behavior
+"scripts/**" = ["S603"]  # install/doctor scripts shell out to CLIs by design
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

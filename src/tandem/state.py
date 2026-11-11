@@ -224,10 +224,15 @@ class StatePaths:
         ensure_dir(self.sessions_dir)
 
 
+# The rolling consult window (24h): a module constant so the doctor can
+# re-use the exact number the counter itself uses.
+ROLLING_WINDOW_S = 24 * 3600.0
+
+
 class RollingCounter:
     """Timestamp-window counter persisted as JSON (callers hold the master lock)."""
 
-    def __init__(self, path: Path, *, window_s: float = 86400.0) -> None:
+    def __init__(self, path: Path, *, window_s: float = ROLLING_WINDOW_S) -> None:
         self.path = path
         self.window_s = window_s
 
