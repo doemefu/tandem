@@ -73,8 +73,12 @@ async def bridge_status_impl(
     if child_mode():
         raise refusal("bridge_status")
     if "claude" not in versions:
-        versions["claude"] = await probe(cfg.claude_bin)
-        versions["vibe"] = await probe(cfg.vibe_bin)
+        # Fill both keys in one update after both probes: a concurrent tool
+        # call in the probe window must not see a half-filled cache (a
+        # missing "vibe" key is a KeyError someone else has to handle).
+        claude_version = await probe(cfg.claude_bin)
+        vibe_version = await probe(cfg.vibe_bin)
+        versions.update({"claude": claude_version, "vibe": vibe_version})
     calls = await anyio.to_thread.run_sync(counter.count)
     return {
         "role": cfg.role,
@@ -91,11 +95,33 @@ async def bridge_status_impl(
     }
 
 
+async def ensure_cli_versions(rt: Runtime) -> None:
+    """Probe both CLI versions once per server process, cached on the runtime.
+
+    Called before the first child spawn (never at server start - the host's
+    startup timeout would race the probe) and shared with ``bridge_status``,
+    which reads the same cache. The versions then ride the first run's
+    ``consult_started``/``delegate_started`` event, so drift on a long-lived
+    server (an auto-updated CLI) is a runlog-visible fact.
+    """
+    if "claude" in rt.versions:
+        return
+    claude_version = await probe_cli_version(rt.cfg.claude_bin)
+    vibe_version = await probe_cli_version(rt.cfg.vibe_bin)
+    # One atomic update: a concurrent bridge_status mid-probe must not see
+    # a cache with "claude" set but "vibe" missing.
+    rt.versions.update({"claude": claude_version, "vibe": vibe_version})
+
+
 def build_server(runtime: Runtime) -> MCPServer:
     """Create the MCPServer for the runtime's configured role and register its tools."""
     server = MCPServer(name="tandem", version=__version__)
-    versions: dict[str, str | None] = {}
-    cfg, registry, counter = runtime.cfg, runtime.registry, runtime.counter
+    cfg, registry, counter, versions = (
+        runtime.cfg,
+        runtime.registry,
+        runtime.counter,
+        runtime.versions,
+    )
 
     @server.tool(
         name="bridge_status",

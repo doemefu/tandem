@@ -1,6 +1,6 @@
 [project]
 name = "tandem"
-version = "0.0.1"
+version = "0.1.0"
 description = "Two-agent bridge: Claude Code thinks and decides, Mistral Vibe implements"
 requires-python = "==3.13.*"
 license = "MIT"
