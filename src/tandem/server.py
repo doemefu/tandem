@@ -1,11 +1,11 @@
 """MCPServer wiring, the shared bridge_status tool and role dispatch.
 
 Role dispatch: ``cfg.role == "thinker"`` registers the consult tools from
-``tandem.thinker`` (WP3); the worker's ``delegate_to_vibe`` lands in WP4.
-``bridge_status`` is role-agnostic and implemented here so the runner,
-registry, caps and telemetry have a live MCP host from WP2 on. Real
-stderr/stdout go to the transport; diagnostics and unexpected exceptions
-stay server-side per the SDK contract.
+``tandem.thinker`` (WP3); ``cfg.role == "worker"`` registers the delegation
+tool from ``tandem.worker`` (WP4).  ``bridge_status`` is role-agnostic and
+implemented here so the runner, registry, caps and telemetry have a live
+MCP host from WP2 on. Real stderr/stdout go to the transport; diagnostics
+and unexpected exceptions stay server-side per the SDK contract.
 """
 
 from __future__ import annotations
@@ -113,5 +113,9 @@ def build_server(runtime: Runtime) -> MCPServer:
         from tandem import thinker
 
         thinker.add_tools(server, runtime)
+    elif cfg.role == "worker":
+        from tandem import worker
+
+        worker.add_tools(server, runtime)
 
     return server

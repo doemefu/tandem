@@ -125,7 +125,7 @@ def test_build_server_registers_role_tools(tmp_path: Path) -> None:
     worker_dir = tmp_path / "worker-home"
     worker_server = build_server(_runtime(worker_dir, "worker"))
     worker_names = {tool.name for tool in asyncio.run(worker_server.list_tools())}
-    assert worker_names == {"bridge_status"}  # delegate_to_vibe lands in WP4
+    assert worker_names == {"bridge_status", "delegate_to_vibe"}
 
 
 def test_tool_error_payload_reaches_caller(tmp_path: Path) -> None:

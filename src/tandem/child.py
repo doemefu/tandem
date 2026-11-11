@@ -16,6 +16,7 @@ import hashlib
 import os
 import signal
 import sys
+import threading
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -100,24 +101,39 @@ class ChildRegistry:
     died) and for ``doctor``. The lock file is the state dir's single master
     lock; it is created once and never unlinked - the kernel releases it when
     the holder dies. Stale entries (dead pgid older than the stale window) are
-    pruned opportunistically while the lock is held.
+    pruned opportunistically while the lock is held.  Mutations of the in-memory
+    ``_own`` map are serialized by a thread lock; snapshots copy optimistically
+    with a retry loop so the signal-handler path never blocks on threading
+    primitives.
     """
 
     def __init__(self, paths: StatePaths) -> None:
         self._paths = paths
         self._own: dict[str, RegistryEntry] = {}
+        self._own_lock = threading.Lock()
 
     def register(self, entry: RegistryEntry) -> None:
-        self._own[entry.run_id] = entry
-        self._persist(drop=frozenset())
+        with self._own_lock:
+            self._own[entry.run_id] = entry
+            snapshot = self._safe_snapshot()
+        self._persist(drop=frozenset(), snapshot=snapshot)
 
     def unregister(self, run_id: str) -> None:
-        self._own.pop(run_id, None)
-        self._persist(drop=frozenset({run_id}))
+        with self._own_lock:
+            self._own.pop(run_id, None)
+            snapshot = self._safe_snapshot()
+        self._persist(drop=frozenset({run_id}), snapshot=snapshot)
 
     def own(self) -> tuple[RegistryEntry, ...]:
         """This instance's live entries (no disk access; signal-handler safe)."""
-        return tuple(self._own.values())
+        return self._safe_snapshot()
+
+    def _safe_snapshot(self) -> tuple[RegistryEntry, ...]:
+        while True:
+            try:
+                return tuple(self._own.values())
+            except RuntimeError:
+                continue  # the dict changed size mid-copy from another thread
 
     def persistent(self) -> tuple[RegistryEntry, ...]:
         """All instances' live entries, read from the mirror (doctor/watchdog)."""
@@ -139,7 +155,7 @@ class ChildRegistry:
                 signaled.append(entry.pgid)
         return signaled
 
-    def _persist(self, *, drop: frozenset[str]) -> None:
+    def _persist(self, *, drop: frozenset[str], snapshot: tuple[RegistryEntry, ...]) -> None:
         now = time.time()
         with file_lock(self._paths.lock, timeout_s=_LOCK_TIMEOUT_S):
             data = load_json(self._paths.registry_file, {"children": []})
@@ -149,9 +165,9 @@ class ChildRegistry:
             for raw in data.get("children", []):
                 if isinstance(raw, dict):
                     _merge_kept(kept, raw, drop, now)
-            for url_id, entry in self._own.items():
-                if url_id not in drop:
-                    kept[url_id] = entry.to_json()
+            for entry in snapshot:
+                if entry.run_id not in drop:
+                    kept[entry.run_id] = entry.to_json()
             save_json(self._paths.registry_file, {"children": list(kept.values())})
 
 
@@ -191,16 +207,26 @@ async def run_child(
         run_id = f"child-{proc.pid}"
     registered = registry is not None
     if registry is not None:
-        await anyio.to_thread.run_sync(
-            registry.register,
-            RegistryEntry(
-                run_id=run_id,
-                pgid=proc.pid,
-                started_at=time.time(),
-                argv_hash=argv_hash(argv),
-                owner_pid=os.getpid(),
-            ),
-        )
+        try:
+            await anyio.to_thread.run_sync(
+                registry.register,
+                RegistryEntry(
+                    run_id=run_id,
+                    pgid=proc.pid,
+                    started_at=time.time(),
+                    argv_hash=argv_hash(argv),
+                    owner_pid=os.getpid(),
+                ),
+            )
+        except BaseException:
+            # A failed registration (lock timeout, registry corruption) must not
+            # leave a live, unsupervised child group: kill the fresh group and
+            # surface the error to the caller.
+            signal_group(proc.pid, signal.SIGTERM)
+            with anyio.move_on_after(grace_s, shield=True):
+                await proc.wait()
+            signal_group(proc.pid, signal.SIGKILL)
+            raise
 
     stdout_buf = bytearray()
     stderr_buf = bytearray()

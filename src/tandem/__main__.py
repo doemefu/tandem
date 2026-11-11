@@ -40,8 +40,8 @@ async def _serve(cfg: Config) -> None:
     from tandem.runlog import RunLog
     from tandem.runtime import Runtime
     from tandem.server import build_server
-    from tandem.sessions import SessionRegistry
-    from tandem.state import RollingCounter, StatePaths
+    from tandem.sessions import SESSION_TTL_S, SessionRegistry
+    from tandem.state import RollingCounter, StatePaths, sweep_ttl, sweep_ttl_dirs
 
     paths = StatePaths(cfg.state_dir)
     await anyio.to_thread.run_sync(paths.ensure_layout)
@@ -49,7 +49,14 @@ async def _serve(cfg: Config) -> None:
     counter = RollingCounter(paths.counters_file)
     sessions = SessionRegistry(paths)
     log = RunLog(paths.runs_dir, role=cfg.role)
-    await anyio.to_thread.run_sync(lambda: RunLog.prune(paths.runs_dir))
+
+    def startup_cleanup() -> None:
+        RunLog.prune(paths.runs_dir)
+        # Run-dir hygiene also for instances that never got a second call.
+        sweep_ttl_dirs(paths.tasks_dir, cfg.task_ttl_hours)
+        sweep_ttl(paths.sessions_dir, SESSION_TTL_S / 3600.0)
+
+    await anyio.to_thread.run_sync(startup_cleanup)
 
     requested = threading.Event()
     install_shutdown_handlers(registry, requested)

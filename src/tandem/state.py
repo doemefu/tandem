@@ -13,6 +13,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import shutil
 import time
 import uuid
 from collections.abc import Iterator
@@ -160,6 +161,28 @@ def sweep_ttl(path: Path, ttl_hours: float, *, now: float | None = None) -> None
                 continue
             if entry.stat().st_mtime < cutoff:
                 entry.unlink()
+    except OSError:
+        return
+
+
+def sweep_ttl_dirs(path: Path, ttl_hours: float, *, now: float | None = None) -> None:
+    """Delete subdirectories older than ``ttl_hours`` (whole trees). Never raises.
+
+    ``sweep_ttl`` skips directories on purpose; run-dir hygiene (per-run
+    trees with specs and exports) needs this whole-directory variant.  A
+    dir's mtime is refreshed when a delegation stages files inside it,
+    so live runs are never caught by a TTL far above the run duration.
+    """
+    if not path.is_dir():
+        return
+    now = time.time() if now is None else now
+    cutoff = now - ttl_hours * 3600.0
+    try:
+        for entry in path.iterdir():
+            if not entry.is_dir():
+                continue
+            if entry.stat().st_mtime < cutoff:
+                shutil.rmtree(entry, ignore_errors=True)
     except OSError:
         return
 

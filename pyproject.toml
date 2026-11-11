@@ -28,7 +28,7 @@ src = ["src", "tests", "scripts"]
 select = ["E", "F", "W", "I", "B", "UP", "S", "N", "SIM", "RUF", "ASYNC", "PT"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S603"]
+"tests/**" = ["S101", "S603", "ASYNC240"]  # test fakes replicate blocking child behavior
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
