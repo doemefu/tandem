@@ -25,7 +25,7 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 
 SRC = str(Path(__file__).resolve().parents[1] / "src")
 EXPECTED_TOOLS = {
-    "thinker": {"bridge_status"},
+    "thinker": {"bridge_status", "consult_claude", "consult_claude_followup"},
     "worker": {"bridge_status"},
 }
 

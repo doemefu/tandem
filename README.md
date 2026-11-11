@@ -20,11 +20,17 @@ integration contract land by v0.1.0.**
 | Vibe (user-scope `[[mcp_servers]]`) | `TANDEM_ROLE=thinker` | `consult_claude`, `consult_claude_followup`, `bridge_status` |
 | Claude Code (user-scope MCP) | `TANDEM_ROLE=worker` | `delegate_to_vibe`, `bridge_status` |
 
+Consult isolation: each `consult_claude` child runs with zero built-in tools, a zero-MCP
+config, no settings sources (no hooks, no CLAUDE.md discovery), and a working directory
+validated against this instance's `TANDEM_ALLOWED_ROOTS` - an unset `cwd` means the
+server's own working directory, validated by the same rule, and
+`consult_claude_followup` reuses and re-validates the consult's registered `cwd`.
+
 ## Compatibility matrix
 
 | Component | Baseline tested | Notes |
 |---|---|---|
-| Claude Code | 2.1.321 | headless `claude -p`; `--tools ""`; `--strict-mcp-config --mcp-config '{"mcpServers":{}}'`; `--session-id` / `--resume` |
+| Claude Code | 2.1.321 (`--resume` probed on 2.1.322) | headless `claude -p`; `--tools ""`; `--strict-mcp-config --mcp-config '{"mcpServers":{}}'`; `--session-id` / `--resume` (resume resolved ids cwd-agnostically in the 2.1.322 probe; the registry still pins the consult cwd) |
 | Mistral Vibe | 3.1.1 | headless `vibe -p`; `--prompt-file`; `--time-limit`; `--output-dir` + export.json |
 | Python | 3.13 | uv-managed, no build backend (`PYTHONPATH=src`) |
 | mcp SDK | 2.3.0 | `MCPServer` (FastMCP renamed), stdio transport |

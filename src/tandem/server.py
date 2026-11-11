@@ -1,10 +1,11 @@
-"""MCPServer wiring and the shared bridge_status tool.
+"""MCPServer wiring, the shared bridge_status tool and role dispatch.
 
-Role tools land later: ``consult_claude``/``consult_claude_followup`` in WP3
-(thinker), ``delegate_to_vibe`` in WP4 (worker). ``bridge_status`` is
-role-agnostic and implemented here so the runner, registry, caps and telemetry
-have a live MCP host from WP2 on. Real stderr/stdout go to the transport;
-diagnostics and unexpected exceptions stay server-side per the SDK contract.
+Role dispatch: ``cfg.role == "thinker"`` registers the consult tools from
+``tandem.thinker`` (WP3); the worker's ``delegate_to_vibe`` lands in WP4.
+``bridge_status`` is role-agnostic and implemented here so the runner,
+registry, caps and telemetry have a live MCP host from WP2 on. Real
+stderr/stdout go to the transport; diagnostics and unexpected exceptions
+stay server-side per the SDK contract.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from tandem.child import ChildRegistry, run_child
 from tandem.config import Config, build_child_env
 from tandem.errors import TandemError
 from tandem.guard import child_mode, refusal
+from tandem.runtime import Runtime
 from tandem.state import RollingCounter
 
 BRIDGE_STATUS_DESCRIPTION = (
@@ -89,10 +91,11 @@ async def bridge_status_impl(
     }
 
 
-def build_server(cfg: Config, registry: ChildRegistry, counter: RollingCounter) -> MCPServer:
-    """Create the MCPServer for ``cfg.role`` and register the tools available today."""
+def build_server(runtime: Runtime) -> MCPServer:
+    """Create the MCPServer for the runtime's configured role and register its tools."""
     server = MCPServer(name="tandem", version=__version__)
     versions: dict[str, str | None] = {}
+    cfg, registry, counter = runtime.cfg, runtime.registry, runtime.counter
 
     @server.tool(
         name="bridge_status",
@@ -105,5 +108,10 @@ def build_server(cfg: Config, registry: ChildRegistry, counter: RollingCounter) 
             return await bridge_status_impl(cfg, registry, counter, versions)
         except TandemError as exc:
             raise ToolError(json.dumps(exc.payload(), separators=(",", ":"))) from exc
+
+    if cfg.role == "thinker":
+        from tandem import thinker
+
+        thinker.add_tools(server, runtime)
 
     return server

@@ -38,21 +38,26 @@ async def _serve(cfg: Config) -> None:
     from tandem.child import ChildRegistry
     from tandem.proctree import install_shutdown_handlers, spawn_watchdog
     from tandem.runlog import RunLog
+    from tandem.runtime import Runtime
     from tandem.server import build_server
+    from tandem.sessions import SessionRegistry
     from tandem.state import RollingCounter, StatePaths
 
     paths = StatePaths(cfg.state_dir)
     await anyio.to_thread.run_sync(paths.ensure_layout)
     registry = ChildRegistry(paths)
     counter = RollingCounter(paths.counters_file)
+    sessions = SessionRegistry(paths)
     log = RunLog(paths.runs_dir, role=cfg.role)
+    await anyio.to_thread.run_sync(lambda: RunLog.prune(paths.runs_dir))
 
     requested = threading.Event()
     install_shutdown_handlers(registry, requested)
     watchdog_pid = await spawn_watchdog(cfg.state_dir, grace_s=cfg.grace_seconds, poll_s=2.0)
     log.event("server_started", role=cfg.role, state_dir=str(cfg.state_dir), watchdog_pid=watchdog_pid)
 
-    server = build_server(cfg, registry, counter)
+    runtime = Runtime(cfg=cfg, paths=paths, registry=registry, counter=counter, sessions=sessions, log=log)
+    server = build_server(runtime)
     try:
         # Shutdown signals kill children in the handler and terminate this
         # process with the signal's default disposition - the serve loop

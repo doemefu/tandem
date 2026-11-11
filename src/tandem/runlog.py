@@ -2,9 +2,11 @@
 
 Metadata first: by default only kinds, durations, exit codes, sizes, hashes
 and error metadata are logged - never prompt or result content. Content
-logging is an explicit opt-in of the server layer (``TANDEM_LOG_CONTENT``,
-applied at call sites in the role tools, with size caps and redaction).
-One file per server process, pruned by count and total bytes.
+logging via ``TANDEM_LOG_CONTENT`` is a reserved opt-in knob: no tool
+applies it yet, and when one does it will be at explicit call sites of
+the tool layer, with size caps and redaction.
+One file per server process, pruned by count and total bytes (the prune
+call lives in ``tandem.__main``).
 """
 
 from __future__ import annotations
