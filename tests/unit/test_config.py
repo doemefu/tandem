@@ -69,6 +69,9 @@ def test_build_child_env_filters_and_marks() -> None:
         "TZ": "Europe/Zurich",
         "SSL_CERT_FILE": "/etc/ca.pem",
         "TANDEM_MAX_CHILDREN": "5",
+        "ANTHROPIC_API_KEY": "sk-test",
+        "ANTHROPIC_BASE_URL": "https://gw.example.test",
+        "CLAUDE_CODE_USE_BEDROCK": "1",
     }
     env = build_child_env(base)
     assert env["TANDEM_CHILD"] == "1"
@@ -79,6 +82,11 @@ def test_build_child_env_filters_and_marks() -> None:
     assert env["SSL_CERT_FILE"] == "/etc/ca.pem"
     assert env["TANDEM_LOG_DIR"] == "/var/tandem-x"
     assert env["TANDEM_MAX_CHILDREN"] == "5"
+    # Operator-chosen auth/routing variables survive the allowlist (API-key
+    # gateways, Bedrock/Vertex toggles); caller input never reaches env.
+    assert env["ANTHROPIC_API_KEY"] == "sk-test"
+    assert env["ANTHROPIC_BASE_URL"] == "https://gw.example.test"
+    assert env["CLAUDE_CODE_USE_BEDROCK"] == "1"
     # Never forwarded: the role (nested mounts pick their own), session markers,
     # VIBE_* config overrides, and anything outside the allowlist.
     assert "TANDEM_ROLE" not in env
@@ -101,3 +109,20 @@ def test_is_cwd_allowed_boundary(tmp_path: Path) -> None:
     assert not cfg.is_cwd_allowed(tmp_path / "missing")
     assert not cfg.is_cwd_allowed(Path.home())
     assert not cfg.is_cwd_allowed(Path("/"))
+
+
+def test_is_cwd_allowed_accepts_dirs_inside_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: the home check must refuse home/ancestors, never descendants."""
+    home = tmp_path / "home"
+    project = home / "dev" / "proj"
+    other_proj = home / "dev" / "other"
+    project.mkdir(parents=True)
+    other_proj.mkdir()
+    monkeypatch.setattr("tandem.config._effective_home", lambda: home.resolve())
+    cfg = Config.from_env(_base_env() | {"TANDEM_ALLOWED_ROOTS": str(project)})
+    assert cfg.is_cwd_allowed(project)
+    assert not cfg.is_cwd_allowed(other_proj)  # sibling outside the root
+    assert not cfg.is_cwd_allowed(home)  # home itself
+    assert not cfg.is_cwd_allowed(home.parent)  # an ancestor of home
+    assert not cfg.is_cwd_allowed(project.parent)  # parent of the allowed root
+    assert not cfg.is_cwd_allowed(project / "missing")

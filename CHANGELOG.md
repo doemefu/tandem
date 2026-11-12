@@ -41,3 +41,42 @@ uses semantic versioning.
   the child from a worker thread and a lock failure there can no longer mask a
   finished child's result (it degrades to a stderr breadcrumb; the watchdog and
   the stale prune sweep the entry).
+- Thinker role tools (WP3): `consult_claude` and `consult_claude_followup` run an
+  isolated `claude -p` child (zero built-in tools via `--tools ""`, zero MCP mounts,
+  prompt on stdin, JSON result parsing with noise tolerance) under the structured
+  consult persona with a mandatory `DECISION:` line in decide mode. Failures carry
+  `error_kind` taxonomies (`quota_terminal` on the Anthropic usage wall,
+  `auth_expired`, `timeout`, `bad_json`, `unknown_session`, ...). Answers end with a
+  `session_id:` trailer; followups resume via `--resume` for 24h (registry TTL, ids
+  validated as filenames), and cost reporting is per call (cumulative figure stored
+  in the registry). The rolling-24h consult budget is consumed atomically under the
+  master lock; per-call cost/turn/latency telemetry lands in the JSONL run log.
+- Session registry (WP3): persistent continuation records with TTL sweep, corrupt
+  file quarantine, and traversal-proof id validation.
+- Review fold (WP3): the consult budget consume is now atomic under the master
+  flock (a same-pid tmp-name collision in atomic writes was also fixed); the WP2
+  `is_cwd_allowed` home check was inverted (it refused every directory inside
+  `$HOME` instead of home and its ancestors only) - fixed with accept-path tests;
+  consults run with `--setting-sources ""` (no settings/hooks/CLAUDE.md discovery,
+  auth unaffected) and an untrusted server cwd now fails closed; `ANTHROPIC_*` and
+  `CLAUDE_*` operator env vars pass through to children (gateway/Bedrock auth);
+  question over the 64KiB byte cap is rejected (`invalid_arguments`) instead of
+  silently truncated, context truncation is surfaced in the runlog; runlog gains
+  `consult_refused`/`consult_abandoned` events and spawn failures/cancellations no
+  longer dangle a `consult_started`; consult tool annotations no longer claim
+  read-only. Note: `tests/fixtures/claude_print_success.json` is synthesized from
+  the documented result shape; WP6 acceptance replaces it with a live capture.
+- Review fold (WP3, GitHub review round 2): the session registry now pins the
+  consult's `cwd` per record and `consult_claude_followup` spawns there (re-validated
+  against the allowlist so narrowed roots still fail closed). Live probes on
+  claude 2.1.322 showed `--resume` resolving ids cwd-agnostically - the pin is
+  environment consistency and insurance, not a resume prerequisite (a "no usable
+  cwd" record classifies `unknown_session`). An id Claude no longer knows fails
+  out-of-band - empty stdout, rc 1, `No conversation found` on stderr - pinned by
+  an inline test string from the live probe and classified
+  `unknown_session` (no retry, fresh consult); the same live session captured the
+  cumulative-cost contract on a resume (first call 0.0182218 USD -> resumed figure
+  0.0213966 USD, delta reported per call; `num_turns` counts the invocation only).
+  Auth classification tightened to status 401 plus the canonical login-wall
+  phrases ("Not logged in", "Login expired") - a stray "log in" inside an
+  unrelated error stays `child_error`.

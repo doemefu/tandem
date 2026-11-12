@@ -23,8 +23,10 @@ _MIB = 1024 * 1024
 
 # Exact variables passed through to children.
 _ENV_EXACT = ("PATH", "HOME", "TMPDIR", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR")
-# Variable prefixes passed through to children.
-_ENV_PREFIXES = ("LANG", "LC_")
+# Variable prefixes passed through to children. ANTHROPIC_/CLAUDE_ keep
+# operator-chosen routing and auth (API-key gateways, Bedrock/Vertex toggles)
+# intact - the env is machine-scoped operator config, not caller input.
+_ENV_PREFIXES = ("LANG", "LC_", "ANTHROPIC_", "CLAUDE_")
 # Never forwarded, whatever the allowlist says: TANDEM_ROLE would change a nested
 # mount's semantics and VIBE_SESSION/VIBE_* would leak host session state and
 # config overrides into the child.
@@ -142,17 +144,23 @@ class Config:
         """Check a delegation target against the per-project trust boundary.
 
         ``path`` must be a real directory (symlink-resolved) under one of the
-        allowlisted roots, and must never be a home directory or its ancestor.
+        allowlisted roots, and must never be the home directory or an ancestor
+        of it (delegating to ``~`` or ``/`` delegates every project at once).
         The allowlist IS the trust grant: downstream of choosing a repo, project
         hooks and config are trusted by design.
         """
         real = path.resolve()
-        home = Path.home().resolve()
         if not real.is_dir():
             return False
-        if real == home or real == real.parent or home in real.parents:
+        home = _effective_home()
+        if real == home or real in home.parents:
             return False
         return any(real == root.resolve() or root.resolve() in real.parents for root in self.allowed_roots)
+
+
+def _effective_home() -> Path:
+    """The home directory is_cwd_allowed refuses; injectable for tests."""
+    return Path.home().resolve()
 
 
 def build_child_env(base: Mapping[str, str] | None = None) -> dict[str, str]:

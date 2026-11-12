@@ -1,18 +1,23 @@
-"""bridge_status payload, version caching and guard refusal (impl level)."""
+"""bridge_status payload, version caching, guard refusal and role dispatch."""
 
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 from pathlib import Path
 
 import pytest
+from mcp.server.mcpserver.exceptions import ToolError
 
 from tandem.child import ChildRegistry, RegistryEntry
 from tandem.config import Config
 from tandem.errors import GuardRefusedError
-from tandem.server import bridge_status_impl
+from tandem.runlog import RunLog
+from tandem.runtime import Runtime
+from tandem.server import bridge_status_impl, build_server
+from tandem.sessions import SessionRegistry
 from tandem.state import RollingCounter, StatePaths
 
 
@@ -96,3 +101,40 @@ def test_bridge_status_refused_in_child(tmp_path: Path, monkeypatch: pytest.Monk
     with pytest.raises(GuardRefusedError) as excinfo:
         asyncio.run(bridge_status_impl(cfg, registry, counter, {}, probe=_probe_fake))
     assert excinfo.value.error_kind == "loop_guard"
+
+
+def _runtime(tmp_path: Path, role: str) -> Runtime:
+    cfg = _cfg(tmp_path / "state", role)
+    paths = StatePaths(tmp_path / "state")
+    paths.ensure_layout()
+    return Runtime(
+        cfg=cfg,
+        paths=paths,
+        registry=ChildRegistry(paths),
+        counter=RollingCounter(paths.counters_file),
+        sessions=SessionRegistry(paths),
+        log=RunLog(paths.runs_dir, role=role),
+    )
+
+
+def test_build_server_registers_role_tools(tmp_path: Path) -> None:
+    thinker_server = build_server(_runtime(tmp_path / "thinker", "thinker"))
+    thinker_names = {tool.name for tool in asyncio.run(thinker_server.list_tools())}
+    assert thinker_names == {"bridge_status", "consult_claude", "consult_claude_followup"}
+
+    worker_dir = tmp_path / "worker-home"
+    worker_server = build_server(_runtime(worker_dir, "worker"))
+    worker_names = {tool.name for tool in asyncio.run(worker_server.list_tools())}
+    assert worker_names == {"bridge_status"}  # delegate_to_vibe lands in WP4
+
+
+def test_tool_error_payload_reaches_caller(tmp_path: Path) -> None:
+    server = build_server(_runtime(tmp_path, "thinker"))
+    with pytest.raises(ToolError) as excinfo:
+        asyncio.run(server.call_tool("consult_claude", {"question": "q", "mode": "beg"}))
+    raw = str(excinfo.value)
+    prefix = "Error executing tool consult_claude: "
+    assert raw.startswith(prefix)
+    payload = json.loads(raw[len(prefix) :])
+    assert payload["is_error"] is True
+    assert payload["error_kind"] == "invalid_arguments"

@@ -14,6 +14,7 @@ import fcntl
 import json
 import os
 import time
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
@@ -57,9 +58,14 @@ def ensure_dir(path: Path) -> None:
 
 
 def atomic_write_bytes(path: Path, data: bytes) -> None:
-    """Durably write ``data`` to ``path`` with 0600 permissions (tmp + fsync + replace)."""
+    """Durably write ``data`` to ``path`` with 0600 permissions (tmp + fsync + replace).
+
+    The tmp name carries the pid AND a uuid: two worker threads of one
+    process share a pid, and a shared scratch name would race the
+    os.replace (one thread consumes it, the other crashes).
+    """
     ensure_dir(path.parent)
-    tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}")
+    tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex[:8]}")
     try:
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
