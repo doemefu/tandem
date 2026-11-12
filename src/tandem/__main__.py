@@ -1,33 +1,68 @@
 """Entrypoint of the tandem stdio MCP server.
 
-The tool set is selected by the ``TANDEM_ROLE`` environment variable: "thinker"
-(mounted in Vibe, consults Claude) or "worker" (mounted in Claude Code, delegates
-to Vibe). A missing or unknown role is a configuration error: the server refuses
-to start (exit 2) instead of guessing. Protocol traffic never goes to stdout, so
-diagnostics are written to stderr.
+``TANDEM_ROLE`` selects the tool set: "thinker" (mounted in Vibe, consults
+Claude) or "worker" (mounted in Claude Code, delegates to Vibe). A missing or
+unknown role is a configuration error: the server refuses to start (exit 2).
+Diagnostics go to stderr - stdout is MCP protocol. Sync bootstrap (config,
+state layout, signal handlers) runs before the event loop; everything inside
+``anyio`` is async. Child cleanup on any teardown path is owned by
+``tandem.child.run_child``'s shielded finally and the signal choreography.
 """
 
-import os
-import sys
+from __future__ import annotations
 
-from tandem import ROLES, __version__
+import sys
+import threading
+
+import anyio
+
+from tandem import __version__
+from tandem.config import Config
+from tandem.errors import ConfigError
 
 EXIT_CONFIG_ERROR = 2
 
 
 def main() -> int:
-    role = os.environ.get("TANDEM_ROLE", "")
-    if role not in ROLES:
-        print(
-            f"tandem {__version__}: refusing to start: TANDEM_ROLE must be one of {', '.join(ROLES)}, got {role!r}",
-            file=sys.stderr,
-        )
+    try:
+        cfg = Config.from_env()
+    except ConfigError as exc:
+        print(f"tandem {__version__}: {exc}", file=sys.stderr)
         return EXIT_CONFIG_ERROR
-    print(
-        f"tandem {__version__}: role '{role}' validated (bootstrap: MCP server wiring not implemented yet)",
-        file=sys.stderr,
-    )
+    anyio.run(_serve, cfg)
     return 0
+
+
+async def _serve(cfg: Config) -> None:
+    # Imported here so `python -m tandem` with a bad role never loads the stack.
+    from tandem.child import ChildRegistry
+    from tandem.proctree import install_shutdown_handlers, spawn_watchdog
+    from tandem.runlog import RunLog
+    from tandem.server import build_server
+    from tandem.state import RollingCounter, StatePaths
+
+    paths = StatePaths(cfg.state_dir)
+    await anyio.to_thread.run_sync(paths.ensure_layout)
+    registry = ChildRegistry(paths)
+    counter = RollingCounter(paths.counters_file)
+    log = RunLog(paths.runs_dir, role=cfg.role)
+
+    requested = threading.Event()
+    install_shutdown_handlers(registry, requested)
+    watchdog_pid = await spawn_watchdog(cfg.state_dir, grace_s=cfg.grace_seconds, poll_s=2.0)
+    log.event("server_started", role=cfg.role, state_dir=str(cfg.state_dir), watchdog_pid=watchdog_pid)
+
+    server = build_server(cfg, registry, counter)
+    try:
+        # Shutdown signals kill children in the handler and terminate this
+        # process with the signal's default disposition - the serve loop
+        # cannot be unwound cooperatively (blocking stdin read). This try/
+        # finally covers the graceful stdin-EOF path.
+        await server.run_stdio_async()
+    finally:
+        registry.terminate_own()
+        log.event("server_stopped")
+        log.close()
 
 
 if __name__ == "__main__":
