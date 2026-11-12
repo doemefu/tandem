@@ -83,6 +83,8 @@ CONSULT_TOOL_DESCRIPTION = (
 FOLLOWUP_TOOL_DESCRIPTION = (
     "Continue an earlier consult_claude conversation by passing the session_id it returned. "
     "Claude remembers that conversation, so add only the new context or question delta. "
+    "Followups always run in decide mode: the answer targets a final DECISION line "
+    "(the decision field is set whenever Claude complies) - use them to converge. "
     "With no valid session_id, start a new consult_claude instead - never invent or guess an id. "
     "max_seconds must be 10-1800 (default 180)."
 )

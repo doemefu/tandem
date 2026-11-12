@@ -138,3 +138,85 @@ uses semantic versioning.
   delegation's run dir is live for 3600s plus the kill headroom while the
   dir mtime sits at staging, so a TTL at the run's own length could sweep
   it.
+- Install, doctor and docs (WP5): `scripts/install.sh` mounts the thinker role in
+  Vibe (`vibe mcp add`, user config) and the worker role in Claude Code
+  (`claude mcp add-json`, user scope) from the repo's uv-managed venv python,
+  idempotently and with an explicit `--roots` trust grant (home/ancestor roots
+  refused at install time as well as at server start); `scripts/uninstall.sh`
+  removes both mounts and keeps the state dir; `scripts/doctor.py` reports
+  venv/tandem/CLI health, both mounts (Toml and JSON config parsing), state-dir
+  permissions, master flock reachability, registry liveness and
+  session/task/run inventories - read-only, warnings-not-failures semantics;
+  README rewritten as the integration contract (roles, tool semantics, config
+  table, security model incl. vibe's own `~/.vibe/logs/session` transcript
+  retention and claude-consult privacy, limitations).
+- Review fold (WP5): the installer's home-root check was inverted both ways -
+  it refused every directory under `$HOME` (the README's own install example
+  died with exit 2) while accepting ancestors of home such as `/Users` - roots
+  are now resolved once and refused exactly when home is at or under the root,
+  mirroring `tandem.config._reject_home_roots`; `--roots` splits on colons only
+  (whitespace inside entries preserved, matching the server's PATH-like
+  parsing), missing option values report usage instead of `set -u` noise,
+  paths that cannot be embedded in the claude mount JSON (quotes, backslashes)
+  are refused before any write, binary overrides are checked as given and
+  pinned to absolute paths when resolvable (a GUI-launched MCP host sees a
+  different PATH than the terminal), and `--help` prints its header via a
+  marker rule instead of a line range. `uninstall.sh` distinguishes
+  nothing-mounted from failed removals (a mount still listed after a failed
+  remove is a hard error). The doctor probes the real master lock when the
+  state dir has one (previously a throwaway file), fails on a state dir that
+  exists as a non-directory, expands `~` in mount values and compares both
+  mounts with each other instead of against the shell env (a matching install
+  now reports zero phantom root warnings; the invoking shell normally sets no
+  roots - the mounts carry them), re-validates mounted roots through the
+  server's own rule, shows the consult counter against its cap (shell >
+  agreeing mounts > default) and warns when the two mounts set different
+  caps, reads the rolling counters read-only (no quarantine renames), and
+  tolerates malformed registry rows; its exit contract (0 = healthy with
+  warnings, 1 = tandem could not start) is now stated accurately. The README
+  gains the complete `error_kind` taxonomy (`child_crash`, `terminated`,
+  `state`, `state_lock_busy`, fallback `tandem_error`), the no-refund budget
+  policy, the followup decide-mode disclosure (also in the followup tool
+  description), config rows for `TANDEM_STDOUT_CAP_BYTES` /
+  `TANDEM_STDERR_KEEP_BYTES`, the TMPDIR env passthrough and the sliding
+  (idle-window) 24h session TTL; world-writable refusal is documented as the
+  call-time delegation rule it is. New regression tests pin the installer
+  validation contract (rejection paths, whitespace-preserving roots, help
+  output) and the doctor's install-consistency behavior (drift, home-rule
+  mounts, broken state dir, missing CLIs, counter display). A live install
+  on vibe 3.1.1 then caught two integration bugs no static review could:
+  `vibe mcp add --arg -m` parses `-m` as a flag (the installer passes
+  `--arg=-m` in value form), and the user config stores servers as a named
+  `[[mcp_servers]]` array of tables (the doctor parses the real shape,
+  keeping tolerance for the keyed-table form); a fully mounted machine now
+  reports healthy with zero warnings.
+- Review fold (WP5, GitHub review round 2): `install.sh` pins the vibe host's
+  own MCP timeouts into the thinker mount (`--tool-timeout-sec 1860` = the
+  1800s consult ceiling plus headroom, `--startup-timeout-sec 30`; both flags
+  verified against `vibe mcp add --help`) - vibe's ~60s tool default would cut
+  every long consult; the doctor now re-checks `tool_timeout_sec` /
+  `startup_timeout_sec` as written in the vibe config (missing or low values
+  warn with the reinstall advice), and re-running the installer live-verified
+  the persisted shape (`tool_timeout_sec = 1860.0` in the user config). The
+  README records the wide-grant decision (`$HOME/informatik` breadth is
+  deliberate - the boundary is allowlist + review gates, not repo
+  individuation), documents the followup cwd pin and the "No conversation
+  found" classification in the consult contract, adds the
+  `~/.claude/settings.json` permissions allow-list note (tandem never edits
+  permissions; the absence just means per-call confirmation), honest platform
+  wording (macOS live-tested, Linux exercised by CI - the CI loop caught the
+  Linux-only zombie/signal behavior), the watchdog pid-reuse caveat, and the
+  Claude-host tool-timeout caution for delegations pushed toward 3600s. New
+  process artifacts: `CLAUDE.md` (agent guidance incl. gates and the
+  fail-closed/metadata-only invariants) with `AGENTS.md` as a symlink to it,
+  and `CONTRIBUTING.md` (the review gate: subagent specialist reviews + PR
+  review + CI green before merge, the one-commit-per-WP amend discipline, and
+  the live-evidence culture). Also from this round: `uninstall.sh`'s vibe-side
+  failure detection was dead code (vibe 3.1.1 has no `mcp list`, live-probed),
+  so a failed `vibe mcp remove` silently printed "(nothing to remove)" - the
+  guard now resolves the vibe config file itself (both array-of-tables and
+  keyed-table shapes), a residual tandem entry after a failed remove is a
+  hard error, and fake-CLI uninstall tests pin the contract; the doctor's
+  consult window imports the counter's own constant instead of duplicating
+  86400, and the install-test module doc no longer overclaims that every case
+  aborts in validation.
