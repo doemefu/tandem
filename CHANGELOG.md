@@ -80,3 +80,61 @@ uses semantic versioning.
   Auth classification tightened to status 401 plus the canonical login-wall
   phrases ("Not logged in", "Login expired") - a stray "log in" inside an
   unrelated error stays `child_error`.
+- Worker role tools (WP4): `delegate_to_vibe` runs one headless vibe child per
+  delegation - the task becomes a spec file (goal/context plus a six-line REPORT
+  reporting contract) staged 0600 under a private per-run dir in the state tree,
+  and vibe gets `--workdir` (required, allowlist-enforced, never home),
+  `--prompt-file` (programmatic mode, the prompt never touches argv),
+  `--output-dir` (export.json evidence), a graceful `--time-limit` with tandem
+  hard-kill headroom, `--agent accept-edits|smart-approve`, and
+  `--disabled-tools re:mcp_.*` so the child cannot reach any MCP server. Sandbox
+  caps share the cross-instance `TANDEM_MAX_CHILDREN` limit (the rolling-24h
+  consult budget is NOT consumed: it prices Claude asks, not local vibe runs).
+  `export.json` maps honestly: `finished` -> completed; limit stop_reasons
+  (deadline/turn/token/price/length) -> `status: partial` without an error;
+  `terminated`/error stop_reasons and a success-shaped export with a nonzero exit
+  raise (`terminated`/`child_error`); a missing/unparseable export is
+  `child_crash`. Both vibe fixtures are synthesized pending WP6 live captures.
+- Review fold (WP4): run-dir TTL sweeping actually deletes delegation directories
+  (whole-tree sweep at delegation time and server startup - `sweep_ttl` only ever
+  matched loose files, so run dirs were leaking); a hard kill with a usable export
+  keeps export-wins semantics but reports `timed_out: true` plus a synthetic
+  warning; the timeout error says the workdir may carry partial edits and points
+  at the run dir; an empty report falls back to the export's own answer field and
+  a completed run with no report anywhere is `bad_response`; `--disabled-tools`
+  now also strips built-in connectors (`re:connector_.*`) and an operator
+  `TANDEM_DELEGATE_MAX_PRICE` passes `--max-price` per run; the kill wall's
+  headroom never drops below 30s; world-writable delegation cwds are refused;
+  staging failures raise structured `state` errors with a `delegate_refused`
+  event; `TANDEM_ALLOWED_ROOTS` entries equal to home (or its ancestors) refuse
+  to start; child-registration failures in the runner now kill the fresh process
+  group instead of leaking it, and the registry's in-memory map is
+  thread-mutation-safe. `TANDEM_DELEGATE_TRUST` (default on - repo `.vibe`
+  config and hooks load and execute for delegated runs) is now disclosed in the
+  tool description.
+- Review fold (WP4, GitHub review round 2): the default delegate mode is
+  `smart-approve` (the plan's value; `accept-edits` remains available for
+  edit-only tasks, and its tool copy now says plainly that EVERY shell command
+  is denied in that mode - a headless run cannot ask a human for the approval
+  those commands need). The six-line REPORT contract is parsed and surfaced as
+  structured payload fields (`report_status`, `report_summary`,
+  `files_changed`, `commands_run`, `result_paths`, `remaining`); a
+  REPORT_STATUS that disagrees with the export-derived status warns and never
+  rewrites either side. A live smart-approve delegation verified the contract
+  end-to-end and showed the real export.json carries no structured command
+  list - so `commands_run` is the child's self-reported audit, carried into
+  the `delegate_completed` runlog event together with mode, trust and
+  `report_status` (`delegate_started` carries trust, any price cap and the
+  result cap). Answers over `TANDEM_DELEGATE_RESULT_CAP_BYTES` (new knob,
+  default 30k) spill whole to `report.md` in the run dir while the visible
+  answer clips at the cap; contract parsing runs on the full report before
+  capping so the structured fields survive intact, cap-truncated stdout
+  yields to the export's own complete answer copy before any of that, and a
+  failed spill write degrades to clip-without-spill instead of losing the
+  run. Export warnings serialize as JSON strings (structured entries were
+  Python dict-reprs), the top-level `answer` export key is documented as
+  defensive-only (live exports nest it under `outcome`), and
+  `TANDEM_TASK_TTL_H` now refuses values below two hours - a max-length
+  delegation's run dir is live for 3600s plus the kill headroom while the
+  dir mtime sits at staging, so a TTL at the run's own length could sweep
+  it.

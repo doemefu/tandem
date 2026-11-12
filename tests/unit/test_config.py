@@ -126,3 +126,61 @@ def test_is_cwd_allowed_accepts_dirs_inside_home(tmp_path: Path, monkeypatch: py
     assert not cfg.is_cwd_allowed(home.parent)  # an ancestor of home
     assert not cfg.is_cwd_allowed(project.parent)  # parent of the allowed root
     assert not cfg.is_cwd_allowed(project / "missing")
+
+
+def test_from_env_rejects_home_as_allowed_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: an allowlisted root of home (or an ancestor) re-opens everything."""
+    home = tmp_path / "home"
+    (home / "dev" / "proj").mkdir(parents=True)
+    monkeypatch.setattr("tandem.config._effective_home", lambda: home.resolve())
+    for bad_root in (home, home.parent, Path("/")):
+        if not bad_root.exists():
+            continue
+        with pytest.raises(ConfigError, match="home"):
+            Config.from_env(
+                _base_env("worker") | {"TANDEM_LOG_DIR": str(tmp_path / "state"), "TANDEM_ALLOWED_ROOTS": str(bad_root)}
+            )
+    # A normal project root still works.
+    cfg = Config.from_env(
+        _base_env("worker")
+        | {"TANDEM_LOG_DIR": str(tmp_path / "state"), "TANDEM_ALLOWED_ROOTS": str(home / "dev" / "proj")}
+    )
+    assert cfg.allowed_roots == (home / "dev" / "proj",)
+
+
+def test_delegate_max_price_knob() -> None:
+    unset = Config.from_env(_base_env("worker") | {"TANDEM_LOG_DIR": "/var/empty"})
+    assert unset.delegate_max_price is None
+    priced = Config.from_env(
+        _base_env("worker") | {"TANDEM_LOG_DIR": "/var/empty", "TANDEM_DELEGATE_MAX_PRICE": "2.50"}
+    )
+    assert priced.delegate_max_price == 2.5
+    with pytest.raises(ConfigError, match="TANDEM_DELEGATE_MAX_PRICE"):
+        Config.from_env(_base_env("worker") | {"TANDEM_LOG_DIR": "/var/empty", "TANDEM_DELEGATE_MAX_PRICE": "0"})
+    with pytest.raises(ConfigError, match="TANDEM_DELEGATE_MAX_PRICE"):
+        Config.from_env(_base_env("worker") | {"TANDEM_LOG_DIR": "/var/empty", "TANDEM_DELEGATE_MAX_PRICE": "abc"})
+
+
+def test_task_ttl_floor_is_two_hours() -> None:
+    # A max-length delegation's run dir is live for 3600s + >30s headroom
+    # (dir mtime sits at staging until the export lands), and a shorter TTL
+    # could sweep a live run's directory mid-flight - so the configurator
+    # refuses anything under two hours.
+    for bad in ("0.5", "1.0", "1.9"):
+        with pytest.raises(ConfigError, match="TANDEM_TASK_TTL_H"):
+            Config.from_env(_base_env("worker") | {"TANDEM_LOG_DIR": "/var/empty", "TANDEM_TASK_TTL_H": bad})
+    okay = Config.from_env(_base_env("worker") | {"TANDEM_LOG_DIR": "/var/empty", "TANDEM_TASK_TTL_H": "2.0"})
+    assert okay.task_ttl_hours == 2.0
+
+
+def test_delegate_result_cap_knob() -> None:
+    default = Config.from_env(_base_env("worker") | {"TANDEM_LOG_DIR": "/var/empty"})
+    assert default.delegate_result_cap_bytes == 30_000
+    tuned = Config.from_env(
+        _base_env("worker") | {"TANDEM_LOG_DIR": "/var/empty", "TANDEM_DELEGATE_RESULT_CAP_BYTES": "4096"}
+    )
+    assert tuned.delegate_result_cap_bytes == 4096
+    with pytest.raises(ConfigError, match="TANDEM_DELEGATE_RESULT_CAP_BYTES"):
+        Config.from_env(
+            _base_env("worker") | {"TANDEM_LOG_DIR": "/var/empty", "TANDEM_DELEGATE_RESULT_CAP_BYTES": "10"}
+        )

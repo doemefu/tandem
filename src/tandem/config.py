@@ -38,8 +38,32 @@ DEFAULT_MAX_CHILDREN = 2
 DEFAULT_DAILY_CONSULT_CAP = 40
 DEFAULT_STDOUT_CAP_BYTES = 10 * _MIB
 DEFAULT_TASK_TTL_HOURS = 24.0
+# A max-length delegation is live for 3600s plus the >=30s kill headroom and
+# parse time (~61 min spawn-to-verdict), and the run dir's mtime stays at its
+# STAGING time for that whole window (the export lands last).  A TTL sweep
+# launched by a concurrent delegation compares against that staging mtime, so
+# a TTL at the run's own length can delete a live run's dir.  Two hours keeps
+# a comfortable margin and is the floor.
+MIN_TASK_TTL_HOURS = 2.0
+# The delegation answer a caller sees is capped: MCP payloads that are
+# effectively a log dump drown the caller's context.  The full report
+# spills to a file in the run dir instead of being lost.
+DEFAULT_DELEGATE_RESULT_CAP_BYTES = 30_000
 DEFAULT_GRACE_SECONDS = 10.0
 DEFAULT_STDERR_KEEP_BYTES = 8 * 1024 * 1024  # per-child stderr accumulation cap
+
+
+def _env_float_optional(env: Mapping[str, str], name: str, *, minimum: float) -> float | None:
+    raw = env.get(name)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ConfigError(f"{name} must be a number, got {raw!r}") from exc
+    if value < minimum:
+        raise ConfigError(f"{name} must be >= {minimum}, got {value}")
+    return value
 
 
 def _truthy(raw: str) -> bool:
@@ -109,6 +133,8 @@ class Config:
     grace_seconds: float
     stderr_keep_bytes: int
     delegate_trust: bool
+    delegate_max_price: float | None
+    delegate_result_cap_bytes: int
     content_log: bool
     claude_bin: str
     vibe_bin: str
@@ -121,20 +147,33 @@ class Config:
             raise ConfigError(f"refusing to start: TANDEM_ROLE must be one of {', '.join(ROLES)}, got {role!r}")
         state_dir_raw = env.get("TANDEM_LOG_DIR", "")
         state_dir = Path(state_dir_raw).expanduser() if state_dir_raw.strip() else DEFAULT_STATE_DIR
+        allowed_roots = _env_paths(env, "TANDEM_ALLOWED_ROOTS", default=(Path.cwd(),))
+        _reject_home_roots(allowed_roots)
         return cls(
             role=role,
             state_dir=state_dir,
             cwd=Path.cwd(),
-            allowed_roots=_env_paths(env, "TANDEM_ALLOWED_ROOTS", default=(Path.cwd(),)),
+            allowed_roots=allowed_roots,
             max_children=_env_int(env, "TANDEM_MAX_CHILDREN", default=DEFAULT_MAX_CHILDREN, minimum=1),
             daily_consult_cap=_env_int(env, "TANDEM_DAILY_CONSULT_CAP", default=DEFAULT_DAILY_CONSULT_CAP, minimum=1),
             stdout_cap_bytes=_env_int(env, "TANDEM_STDOUT_CAP_BYTES", default=DEFAULT_STDOUT_CAP_BYTES, minimum=1024),
-            task_ttl_hours=_env_float(env, "TANDEM_TASK_TTL_H", default=DEFAULT_TASK_TTL_HOURS, minimum=0.01),
+            task_ttl_hours=_env_float(
+                env, "TANDEM_TASK_TTL_H", default=DEFAULT_TASK_TTL_HOURS, minimum=MIN_TASK_TTL_HOURS
+            ),
             grace_seconds=_env_float(env, "TANDEM_KILL_GRACE_S", default=DEFAULT_GRACE_SECONDS, minimum=0.05),
             stderr_keep_bytes=_env_int(
                 env, "TANDEM_STDERR_KEEP_BYTES", default=DEFAULT_STDERR_KEEP_BYTES, minimum=1024
             ),
             delegate_trust=_env_bool(env, "TANDEM_DELEGATE_TRUST", default=True),
+            delegate_max_price=_env_float_optional(env, "TANDEM_DELEGATE_MAX_PRICE", minimum=0.01),
+            delegate_result_cap_bytes=(
+                _env_int(
+                    env,
+                    "TANDEM_DELEGATE_RESULT_CAP_BYTES",
+                    default=DEFAULT_DELEGATE_RESULT_CAP_BYTES,
+                    minimum=1024,
+                )
+            ),
             content_log=_env_bool(env, "TANDEM_LOG_CONTENT", default=False),
             claude_bin=env.get("TANDEM_CLAUDE_BIN", "claude"),
             vibe_bin=env.get("TANDEM_VIBE_BIN", "vibe"),
@@ -156,6 +195,18 @@ class Config:
         if real == home or real in home.parents:
             return False
         return any(real == root.resolve() or root.resolve() in real.parents for root in self.allowed_roots)
+
+
+def _reject_home_roots(roots: tuple[Path, ...]) -> None:
+    """An allowlisted root that is home (or its ancestor) re-opens everything."""
+    home = _effective_home()
+    for root in roots:
+        real = root.expanduser().resolve()
+        if real == home or real in home.parents:
+            raise ConfigError(
+                f"refusing to start: TANDEM_ALLOWED_ROOTS entry {root} is the home directory "
+                "or an ancestor of it - allowlist projects, not the home tree"
+            )
 
 
 def _effective_home() -> Path:
