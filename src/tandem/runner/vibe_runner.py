@@ -1,13 +1,14 @@
 """Vibe adapter: delegate argv and export.json mapping.
 
-The export.json schema is only partially pinned: ``stop_reason`` values
-are verified against vibe 3.1.1 help text and research (finished,
-turn_limit, token_limit, price_limit, deadline, terminated, usage_error,
-config_error, infrastructure_failure, refusal, aborted, length), and the
-committed fixtures are synthesized until the WP6 window replaces them
-with live captures.  Everything else is parsed defensively: optional
-fields are harvested by candidate key names, and a missing or unreadable
-export degrades to type ``child_crash`` rather than crashing the tool.
+The export.json schema is pinned by live vibe 3.1.1 captures (WP6): a
+clean finish writes ``"outcome": "finished"`` with ``stop_reason: null``
+and exit code 0; the graceful ``--time-limit`` stop writes
+``"outcome": "deadline"`` with ``stop_reason: "interrupted"`` and exit
+code 3.  The earlier researched stop_reason values (finished, deadline,
+turn_limit, ...) are kept in the classifications defensively; everything
+else is parsed defensively (optional fields harvested by candidate key
+names), and a missing or unreadable export degrades to type
+``child_crash`` rather than crashing the tool.
 """
 
 from __future__ import annotations
@@ -19,11 +20,24 @@ from typing import Any
 
 from tandem.config import Config
 
-STOP_REASON_LIMITS = frozenset(("turn_limit", "token_limit", "price_limit", "deadline", "length"))
+# "interrupted" is vibe 3.1.1's graceful limit stop (verified live: outcome
+# names the limit kind, the CLI exits 3, stderr says "Stopped: <limit>");
+# the researched value set stays for forward/backward tolerance.
+STOP_REASON_LIMITS = frozenset(("interrupted", "turn_limit", "token_limit", "price_limit", "deadline", "length"))
 STOP_REASON_ERRORS = frozenset(("usage_error", "config_error", "infrastructure_failure", "refusal", "aborted"))
 
 DELEGATE_DISABLED_TOOLS = "re:mcp_.*"
 DELEGATE_DISABLED_TOOLS_CONNECTORS = "re:connector_.*"
+# Live-isolation finding (WP6 review round, vibe 3.1.1): a delegated child
+# reached the tandem tools THROUGH tool discovery despite ``re:mcp_.*`` - the
+# child discovered and invoked ``mcp_tandem.consult_claude`` and a nested
+# thinker server ran a real paid consult.  The discovery helper itself and
+# the tandem tool names are denied explicitly now; the strip remains
+# best-effort, and the security model documents the boundary that actually
+# held live (cwd allowlist + consult budget).
+DELEGATE_DISABLED_TOOLS_DISCOVERY = "search_tool_functions"
+DELEGATE_DISABLED_TOOLS_CONSULT = "re:^(mcp_)?tandem"
+DELEGATE_DISABLED_TOOLS_BRIDGE = "re:^(mcp_tandem\\.)?bridge_status"
 EXPORT_READ_CAP_BYTES = 4 * 1024 * 1024
 
 
@@ -32,6 +46,7 @@ class VibeOutcome:
     """Fields tandem uses from one delegation run (export.json + exit)."""
 
     stop_reason: str | None
+    outcome: str | None
     session_id: str | None
     answer: str | None
     cost_usd: float | None
@@ -52,12 +67,14 @@ def build_delegate_args(
     """Argv for one headless vibe delegation.
 
     ``--prompt-file`` alone enters programmatic mode (no -p flag); the
-    prompt never touches argv.  Two repeatable ``--disabled-tools``
-    regexes keep the child from reaching other MCP servers (loop
-    prevention) or any built-in connector (network tightness for a
-    delegated run); ``--trust`` grants the workdir reputation within
-    this invocation only when the operator enabled delegate_trust.
-    ``--max-price`` is passed only when the operator set a per-run cap.
+    prompt never touches argv.  Five repeatable ``--disabled-tools``
+    patterns keep the child from reaching other MCP servers (loop
+    prevention), any built-in connector, tool-discovery (the live-isolation
+    probe reached a nested server through it despite ``re:mcp_.*`` on
+    vibe 3.1.1), and the tandem tool names themselves.  ``--trust`` grants
+    the workdir reputation within this invocation only when the operator
+    enabled delegate_trust; ``--max-price`` is passed only when the
+    operator set a per-run cap.
     """
     argv = [
         cfg.vibe_bin,
@@ -75,6 +92,12 @@ def build_delegate_args(
         DELEGATE_DISABLED_TOOLS,
         "--disabled-tools",
         DELEGATE_DISABLED_TOOLS_CONNECTORS,
+        "--disabled-tools",
+        DELEGATE_DISABLED_TOOLS_DISCOVERY,
+        "--disabled-tools",
+        DELEGATE_DISABLED_TOOLS_CONSULT,
+        "--disabled-tools",
+        DELEGATE_DISABLED_TOOLS_BRIDGE,
     ]
     if max_price_usd is not None:
         argv += ["--max-price", str(max_price_usd)]
@@ -161,6 +184,7 @@ def parse_export(export_path: Path) -> VibeOutcome | None:
         return None
     return VibeOutcome(
         stop_reason=_first_str(raw, ("stop_reason",)),
+        outcome=_first_str(raw, ("outcome",)),
         session_id=_first_str(raw, ("session_id",)),
         answer=_answer(raw),
         cost_usd=_first_float(raw, ("cost_usd", "total_cost_usd")),

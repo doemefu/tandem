@@ -1,9 +1,11 @@
 """Claude consult argv construction and tolerant result-JSON parsing.
 
-Both committed fixtures pin the parser: the quota-wall capture
-(live-captured in WP1), the synthesized success fixture (to be
-replaced by a live capture during WP6 acceptance), and the live
-followup capture of a resumed session (WP3 review round).
+All three committed fixtures pin the parser as live captures: the quota-wall
+capture from WP1, the success capture from WP6 (claude 2.1.321,
+``-p --output-format json`` with the real argument vector built above), and
+the followup capture of a resumed session (WP3 review round, claude 2.1.322).
+Operator credential metadata was redacted from each (a placeholder
+token-expiry timestamp; the quota message's reset timezone).
 """
 
 from __future__ import annotations
@@ -76,11 +78,11 @@ def test_parse_success_fixture() -> None:
     outcome = parse_claude_result(_child(raw))
     assert outcome is not None
     assert outcome.is_error is False
-    assert outcome.session_id == "b07e0c55-9f6a-4f9e-8c8a-1a2b3c4d5e6f"
-    assert outcome.num_turns == 2
-    assert outcome.cost_usd == pytest.approx(0.1245)
+    assert outcome.session_id == "372c6806-beb2-4ea0-a93e-5dec3d24ef8c"
+    assert outcome.num_turns == 1
+    assert outcome.cost_usd == pytest.approx(0.0665458)
     assert outcome.answer is not None
-    assert outcome.answer.startswith("1. Analysis")
+    assert outcome.answer.startswith("1. Analysis done.")
     assert outcome.answer.endswith("cache the results.")
 
 

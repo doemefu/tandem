@@ -138,3 +138,26 @@ def test_tool_error_payload_reaches_caller(tmp_path: Path) -> None:
     payload = json.loads(raw[len(prefix) :])
     assert payload["is_error"] is True
     assert payload["error_kind"] == "invalid_arguments"
+
+
+def test_ensure_cli_versions_probes_once_and_fills_atomically(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The runtime cache starts empty; the probe path is injected so no real
+    # CLI runs.  Both keys must appear together: a concurrent bridge_status
+    # in the probe window must not see a half-filled cache (missing "vibe").
+    import tandem.server as server_module
+
+    calls: list[str] = []
+
+    async def probe(binary: str) -> str | None:
+        calls.append(binary)
+        return f"fake-{binary}"
+
+    monkeypatch.setattr(server_module, "probe_cli_version", probe)
+    rt = _runtime(tmp_path, "thinker")
+    assert rt.versions == {}
+    asyncio.run(server_module.ensure_cli_versions(rt))
+    assert calls == [rt.cfg.claude_bin, rt.cfg.vibe_bin]
+    assert rt.versions == {"claude": f"fake-{rt.cfg.claude_bin}", "vibe": f"fake-{rt.cfg.vibe_bin}"}
+    # Cached from here on: no second probe.
+    asyncio.run(server_module.ensure_cli_versions(rt))
+    assert len(calls) == 2

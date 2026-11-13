@@ -61,6 +61,7 @@ def _runtime(
         counter=RollingCounter(paths.counters_file),
         sessions=SessionRegistry(paths),
         log=RunLog(paths.runs_dir, role="worker"),
+        versions={"claude": "2.1.321", "vibe": "3.1.1"},  # pre-seeded: no real CLI probes in tests
     )
 
 
@@ -239,9 +240,11 @@ def test_success_delegation_full_payload(tmp_path: Path, monkeypatch: pytest.Mon
 
     assert payload["is_error"] is False
     assert payload["status"] == "completed"
-    assert payload["stop_reason"] == "finished"
+    assert payload["stop_reason"] is None  # live capture: clean finish has stop_reason null
+    assert payload["outcome"] == "finished"
     assert payload["answer"] == FUZZ_REPORT.decode()
-    assert payload["session_id"] == "c47104a2-77e6-4bd0-a2a7-93f805e70d00"
+    assert payload["session_id"] == "ab30482b-a2c9-75c5-9d8a-ca069f5ece04"
+    assert payload["cost_usd"] == pytest.approx(0.0212462)
     assert payload["warnings"] == []
     assert payload["timed_out"] is False
     assert payload["report_truncated"] is False
@@ -258,7 +261,7 @@ def test_success_delegation_full_payload(tmp_path: Path, monkeypatch: pytest.Mon
     assert argv[0] == "vibe"
     assert argv[argv.index("--agent") + 1] == "smart-approve"
     assert "--trust" in argv  # delegate_trust default
-    assert argv.count("--disabled-tools") == 2  # MCP + connectors off
+    assert argv.count("--disabled-tools") == 5  # MCP + connectors + discovery + tandem tool names
 
     kwargs = fake.calls[0]["kwargs"]
     assert kwargs["cwd"] == tmp_path
@@ -278,7 +281,8 @@ def test_success_delegation_full_payload(tmp_path: Path, monkeypatch: pytest.Mon
     spec_mode = (run_dir / "prompt.md").stat().st_mode
     assert spec_mode & stat.S_IROTH == 0
     assert spec_mode & stat.S_IWOTH == 0
-    assert json.loads((run_dir / "export.json").read_text())["stop_reason"] == "finished"
+    on_disk_export = json.loads((run_dir / "export.json").read_text())
+    assert on_disk_export["outcome"] == "finished"  # the real success marker
 
 
 def test_spec_file_written_no_trust_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -294,10 +298,45 @@ def test_limit_stop_reason_is_partial_success(tmp_path: Path, monkeypatch: pytes
     payload = asyncio.run(worker.delegate_impl(rt, task="t", cwd=str(tmp_path)))
     assert payload["is_error"] is False
     assert payload["status"] == "partial"
-    assert payload["stop_reason"] == "deadline"
+    assert payload["stop_reason"] == "interrupted"  # live capture: graceful limit stop
+    assert payload["outcome"] == "deadline"  # vibe names the limit kind here
     events = [json.loads(line) for line in rt.log.path.read_text().splitlines()]
     assert events[-1]["kind"] == "delegate_completed"
     assert events[-1]["status"] == "partial"
+
+
+def test_interrupted_with_limit_exit_stays_partial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Live-verified regression: vibe exits 3 on the graceful --time-limit
+    stop - a limit-family stop with its expected exit code is a partial,
+    not a lying success (``child_error``)."""
+    rt = _runtime(tmp_path)
+    _install(
+        monkeypatch,
+        export=_export_bytes("vibe_export_deadline.json"),
+        child=_child_result(b"partial report", returncode=3, stderr=b"Stopped: deadline"),
+    )
+    payload = asyncio.run(worker.delegate_impl(rt, task="t", cwd=str(tmp_path)))
+    assert payload["is_error"] is False
+    assert payload["status"] == "partial"
+    assert payload["stop_reason"] == "interrupted"
+    assert "unrecognized stop_reason" not in " ".join(payload["warnings"])
+
+
+def test_limit_stop_with_unexpected_exit_warns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A limit stop whose exit code is not one of the graceful exits (0/3)
+    stays a partial but surfaces loudly instead of passing silently."""
+    rt = _runtime(tmp_path)
+    _install(
+        monkeypatch,
+        export=_export_bytes("vibe_export_deadline.json"),
+        child=_child_result(b"partial report", returncode=1),
+    )
+    payload = asyncio.run(worker.delegate_impl(rt, task="t", cwd=str(tmp_path)))
+    assert payload["is_error"] is False
+    assert payload["status"] == "partial"
+    joined = " ".join(payload["warnings"])
+    assert "exit code 1" in joined
+    assert "graceful limit stops exit 0 or 3" in joined
 
 
 # ---------------------------------------------------------------------------
@@ -404,9 +443,22 @@ def test_finished_export_survives_hard_kill_with_warning(tmp_path: Path, monkeyp
 
 def test_empty_stdout_falls_back_to_export_answer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rt = _runtime(tmp_path)
-    _install(monkeypatch, export=_export_bytes("vibe_export_success.json"), child=_child_result(b""))
+    # Real exports keep no answer inline (the report goes to child stdout);
+    # the fallback covers a stdout that died mid-write. Inline export on
+    # purpose: the fallback shape, not the live success capture.
+    export = tmp_path / "fallback-answer.json"
+    export.write_text(
+        json.dumps(
+            {
+                "stop_reason": None,
+                "session_id": None,
+                "outcome": {"answer": "Done. Implemented the retry wrapper with exponential backoff."},
+            }
+        )
+    )
+    _install(monkeypatch, export=export, child=_child_result(b""))
     payload = asyncio.run(worker.delegate_impl(rt, task="t", cwd=str(tmp_path)))
-    assert payload["answer"].startswith("Done. Implemented the retry wrapper")  # from export.json outcome.answer
+    assert payload["answer"].startswith("Done. Implemented the retry wrapper")
     assert payload["status"] == "completed"
 
 
@@ -646,26 +698,37 @@ def test_runlog_carries_audit_fields(tmp_path: Path, monkeypatch: pytest.MonkeyP
 def test_explicit_mode_still_reaches_argv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # accept-edits stays available for edit-only tasks; only the DEFAULT moved.
     rt = _runtime(tmp_path)
-    fake = _install(monkeypatch, export=_export_bytes("vibe_export_success.json"), child=_child_result(b""))
+    fake = _install(
+        monkeypatch, export=_export_bytes("vibe_export_success.json"), child=_child_result(b"prose without a contract")
+    )
     payload = asyncio.run(worker.delegate_impl(rt, task="t", cwd=str(tmp_path), mode="accept-edits"))
     argv = fake.calls[0]["argv"]
     assert argv[argv.index("--agent") + 1] == "accept-edits"
     assert payload["is_error"] is False
+    assert payload["report_status"] is None  # live exports carry no contract; the stdout report does
 
 
 def test_truncated_stdout_yields_to_export_answer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # The spooler keeps the stdout HEAD; the six contract lines live at the
     # tail.  When tandem capped stdout, the export's complete answer copy
     # wins before contract parsing - blaming the child for a contract tandem
-    # itself cut would be dishonest.
+    # itself cut would be dishonest.  Live exports keep no answer inline (it
+    # arrives on stdout), so the complete copy here is the inline defensive
+    # shape - the same one the empty-stdout fallback test pins.
     rt = _runtime(tmp_path)
-    _install(
-        monkeypatch,
-        export=_export_bytes("vibe_export_success.json"),
-        child=_child_result(b"truncated head...", truncated=True),
+    export = tmp_path / "fallback-answer.json"
+    export.write_text(
+        json.dumps(
+            {
+                "stop_reason": "finished",
+                "session_id": "ab" * 8,
+                "outcome": {"answer": "Done. Implemented the retry wrapper with exponential backoff."},
+            }
+        )
     )
+    _install(monkeypatch, export=export, child=_child_result(b"truncated head...", truncated=True))
     payload = asyncio.run(worker.delegate_impl(rt, task="t", cwd=str(tmp_path)))
-    assert payload["answer"].startswith("Done. Implemented the retry wrapper")  # export.outcome.answer
+    assert payload["answer"].startswith("Done. Implemented the retry wrapper")  # the export's complete copy
     assert any("capped by tandem" in warning for warning in payload["warnings"])
 
 

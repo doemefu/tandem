@@ -9,7 +9,7 @@ Claude Code (decisions)                             Vibe (implementation)
    |                                                   |
    |  worker role MCP mount                            |  thinker role MCP mount
    v                                                   v
-   +--------------------> tandem <--------------------+
+   +--------------------> tandem <---------------------+
    |  delegate_to_vibe        consult_claude / consult_claude_followup
    |     spawns ONE headless        spawns ONE isolated `claude -p` child
    |     `vibe` child in an         (zero tools, zero MCP mounts, no
@@ -19,19 +19,24 @@ Claude Code (decisions)                             Vibe (implementation)
  as evidence                                      a DECISION line + session id
 ```
 
-The loop is broken twice: the spawned children get `TANDEM_CHILD=1` (tandem
-refuses to act inside its own children) *and* their tool surface is stripped
-(`--disabled-tools` for MCP servers and built-in connectors on the vibe side;
+The loop is broken, with boundaries measured live rather than claimed: the
+spawned children get `TANDEM_CHILD=1` (tandem refuses to act one level deep),
+and their tool surface is stripped (`--disabled-tools` for MCP servers,
+connectors, tool discovery and the tandem tool names on the vibe side;
 `--tools ""`, zero MCP config and `--setting-sources ""` on the claude side).
+A mounted machine still spawns the tandem server inside a delegated child
+(vibe's MCP client behavior), and deep hops do not carry `TANDEM_CHILD` - the
+security model below documents exactly where that leaves the boundary.
 
 ## Status
 
-Work-package development toward v0.1.0. The protocol, hygiene layer (WP2),
-both tool sets (WP3/WP4) and install tooling (WP5) are implemented and tested;
-live cross-CLI acceptance (WP6) is the remaining gate. The result-JSON
-contracts are pinned by fixtures: claude's quota-wall capture is live; the
-claude success fixture and both vibe export fixtures are synthesized until
-the live captures land.
+v0.1.0: the protocol, hygiene layer, both tool sets and the install tooling
+are implemented and tested. The live matrix has run end to end - a live
+consult through the thinker pipeline, a live delegation through the worker
+pipeline - and the result-JSON contracts are pinned by fixtures: the claude
+captures are live, the vibe export captures are live (sanitized of
+machine/account noise). See [CHANGELOG.md](CHANGELOG.md) for the
+work-package history.
 
 ## Roles
 
@@ -46,6 +51,13 @@ validated against this instance's `TANDEM_ALLOWED_ROOTS` - an unset `cwd` means 
 server's own working directory, validated by the same rule, and
 `consult_claude_followup` reuses and re-validates the consult's registered `cwd`.
 
+Role names say what the mount serves its host, not which model thinks or
+implements: Vibe mounts the thinker role because `consult_claude` brings in
+Claude's thinking; Claude Code mounts the worker role because
+`delegate_to_vibe` hands work to Vibe. `bridge_status` ships with both
+roles: it reports the role, lazily probed Claude Code/Vibe versions, caps
+and running children.
+
 ## Compatibility matrix
 
 | Component | Baseline tested | Notes |
@@ -57,17 +69,20 @@ server's own working directory, validated by the same rule, and
 
 ## Install
 
-Requires: Python 3.13, [uv](https://docs.astral.sh/uv/), `vibe` and `claude`
-on PATH.
+From a clone of this repo. Requires: Python 3.13,
+[uv](https://docs.astral.sh/uv/), `vibe` and `claude` on PATH. macOS is the
+live-tested platform; Linux is exercised by CI (see Limitations).
 
 ```sh
 scripts/install.sh --roots "$HOME/informatik"          # colon-separated roots
 ```
 
 - mounts the thinker role in Vibe and the worker role in Claude Code (user
-  scope); idempotent (old `tandem` mounts are replaced)
+  scope); idempotent - re-running the same command after a pull replaces
+  the mounts with the current checkout
 - `--no-vibe` / `--no-claude` mount one side only
-- `--state-dir DIR` overrides the state dir (default `~/.cache/tandem`)
+- `--state-dir DIR` overrides the state dir (`TANDEM_LOG_DIR` as mounted;
+  default `~/.cache/tandem`)
 - the roots you pass ARE the trust grant: delegations may only target
   directories under them (never the home directory itself or its ancestors,
   never world-writable directories)
@@ -82,25 +97,57 @@ scripts/install.sh --roots "$HOME/informatik"          # colon-separated roots
   `"mcp__tandem__bridge_status"`); leaving it out just means Claude asks
   before each delegation
 
-```sh
-scripts/uninstall.sh          # removes both mounts, keeps the state dir
-```
-
 ### Diagnose
 
 ```sh
 uv run python scripts/doctor.py
 ```
 
-Checks the venv, tandem import, both CLIs, both mounts (roles, state dirs,
-roots - mounted roots are re-validated through the server's own home/ancestor
-rule, and the thinker/worker grants are compared with each other),
-state-dir permissions, the master lock (the real lock file when the state
-dir exists), the consult counter against its cap, registry and
-run/session/task inventories. Read-only; exit 0 = healthy (warnings
-allowed), exit 1 only when tandem could not start on this machine.
+Read-only checks:
+
+- venv, tandem import, both CLIs on PATH
+- both mounts: roles, state dirs, roots - mounted roots re-validated
+  through the server's own home/ancestor rule, thinker/worker grants
+  compared with each other
+- state-dir permissions, the master lock (the real lock file when the
+  state dir exists), the consult counter against its cap
+- registry liveness and run/session/task inventories
+
+Exit contract: 0 = healthy (warnings allowed), 1 only when tandem could
+not start on this machine.
+
+### First use
+
+The mounts load in sessions started after the install - restart Claude
+Code and Vibe if they were running, then from either side:
+
+- Vibe: call `consult_claude` on a real question (expect a `DECISION:` line
+  in decide mode and a `session_id:` trailer to feed
+  `consult_claude_followup`).
+- Claude Code: call `delegate_to_vibe` on a small task in a repo under your
+  roots (expect vibe's REPORT block and a `completed` / `partial` status -
+  see the mapping below).
+
+If a tool is missing or errors, re-run the doctor and `bridge_status`.
+
+### Uninstall
+
+```sh
+scripts/uninstall.sh          # removes both mounts, keeps the state dir
+```
 
 ## The integration contract
+
+Failure taxonomy - every error payload from either pipeline carries an
+`error_kind`: `quota_terminal` (Anthropic usage wall, includes Claude's
+reset text), `auth_expired`, `child_error`, `child_crash` (vibe child died
+without export evidence), `terminated` (vibe child killed by design,
+distinct from `child_error`), `timeout`, `empty_stdout`, `bad_json`,
+`bad_response`, `unknown_session`, `invalid_cwd`, `invalid_arguments`,
+`state` (state-dir damage, e.g. a delegation run-dir could not be staged),
+`state_lock_busy` (the master lock stayed held beyond the consult timeout),
+`cap_exceeded`, `loop_guard`, `spawn_failed`. Unexpected errors surface
+with the fallback kind `tandem_error`.
 
 ### consult_claude (Vibe asks Claude)
 
@@ -132,16 +179,7 @@ still from the operator's credentials or `ANTHROPIC_*`/`CLAUDE_*` env).
   A consumed budget unit is never refunded - failed, timed-out and
   quota-walled attempts included.
 
-Failure taxonomy (`error_kind` in every error payload): `quota_terminal`
-(Anthropic usage wall, includes Claude's reset text), `auth_expired`,
-`child_error`, `child_crash` (vibe child died without export evidence),
-`terminated` (vibe child killed by design, distinct from `child_error`),
-`timeout`, `empty_stdout`, `bad_json`, `bad_response`, `unknown_session`,
-`invalid_cwd`, `invalid_arguments`, `state` (state-dir damage, e.g. a
-delegation run-dir could not be staged), `state_lock_busy` (the master lock
-stayed held beyond the consult timeout), `cap_exceeded`, `loop_guard`,
-`spawn_failed`. Unexpected errors surface with the fallback kind
-`tandem_error`.
+- Failures use the shared taxonomy above.
 
 ### delegate_to_vibe (Claude Code asks Vibe)
 
@@ -151,20 +189,31 @@ file (goal, context, and a six-line REPORT contract) staged `0600` under
 tandem's private state dir - the prompt never touches argv. Vibe runs with
 `--prompt-file`, `--output-dir` (evidence lands next to the spec),
 `--time-limit` (vibe exits gracefully and writes `export.json`), `--agent
-accept-edits|smart-approve`, `--disabled-tools re:mcp_.* re:connector_.*`,
-and `--max-price` when the operator sets a spend cap.
+smart-approve|accept-edits`, and five `--disabled-tools` patterns
+(`re:mcp_.*`, `re:connector_.*`, `search_tool_functions` plus the tandem
+tool names - see the security model), and `--max-price` when the operator
+sets a spend cap.
 
-- Honest `export.json` mapping: `finished` -> `completed`; the limit-family
-  stop reasons (`deadline`, `turn_limit`, `token_limit`, `price_limit`,
-  `length`) -> `status: partial`, *not* an error; `terminated` and error-ish
-  stop reasons raise; a missing/unparseable export is `child_crash`; a
-  success-shaped export with a nonzero exit code is distrusted.
+- Honest `export.json` mapping (pinned by live vibe 3.1.1 captures):
+
+  | vibe's exit / export shape | tandem result |
+  | --- | --- |
+  | `stop_reason: null`, top-level `outcome: "finished"`, exit 0 | `status: completed` |
+  | `stop_reason: "interrupted"`, `outcome: "deadline"`, exit 3 (expected) | `status: partial` - not an error |
+  | other limit-family stops (`deadline`, `turn_limit`, `token_limit`, `price_limit`, `length`) | tolerated; the payload's `outcome` tells which limit fired |
+  | `terminated` / error-ish stop reasons | raise |
+  | success-shaped export with an unexpected nonzero exit | distrusted (the child result wins) |
+  | exit without a parseable export | `child_crash` (or `timeout` when the hard kill raced the export write) |
+
+  A limit stop exiting with anything other than 0/3 stays a partial but
+  surfaces a warning.
 - The answer carries vibe's structured report; an empty report falls back to
   the export's own answer field; a hard kill leaves `timed_out: true` and a
   warning instead of pretending to be clean, and the timeout copy tells the
   caller the workdir may carry partial edits.
 - Delegations consume child slots but NOT the consult budget: the budget
   prices Claude asks; vibe runs are already the local CLI.
+- Failures use the shared taxonomy above.
 
 ## Configuration
 
@@ -199,14 +248,33 @@ and `--max-price` when the operator sets a spend cap.
   the allowlist plus the review gates, not per-repo individuation of grants.
   Narrow it per-project by re-running `install.sh --roots <single-repo>`
   whenever that trade stops being comfortable.
-- **Loop guard, two rings:** `TANDEM_CHILD=1` in every spawned child (tandem
-  tools refuse to act), plus tool-surface stripping in the child argv.
+- **Loop guard rings, as actually verified live (vibe 3.1.1, mounted
+  machine):** `TANDEM_CHILD=1` in every tandem-spawned CLI child makes the tandem tools
+  refuse to act one level deep - but a vibe child spawns its OWN MCP servers
+  (the mounted tandem server starts inside a delegated child at client
+  startup, `server_started role=thinker` in the runlog), and vibe does not
+  pass a tandem-spawned child's environment on to those servers, so
+  `TANDEM_CHILD` does not survive that hop. What holds there is the
+  tool-surface strip, hardened after a live probe found a child reaching the
+  nested server THROUGH `search_tool_functions` tool discovery despite
+  `re:mcp_.*` (the pre-hardening probe ran one real paid consult through the
+  nested server, confined by the mount's cwd allowlist and billed to the
+  same consult budget): delegated children now also disable
+  `search_tool_functions` and the tandem tool names explicitly. The
+  post-hardening live probe ends `REPORT_STATUS: blocked` with the nested
+  server present but no tool call landing on it. The strip remains
+  best-effort: treat the cwd allowlist and the consult budget - both
+  verified live as the boundaries that held - as the load-bearing controls.
 - **Isolation:** prompts go via stdin / prompt-file, never argv; children run
   in their own process groups with SIGTERM -> grace -> SIGKILL escalation and
   a detached watchdog that reaps groups when a server dies.
-- **Minimized environment:** children inherit only PATH/HOME/TMPDIR/TZ/SSL
-  certs/locale plus `ANTHROPIC_*`/`CLAUDE_*` (operator auth/routing),
-  `TANDEM_*` minus the role; `VIBE_*` config overrides are stripped.
+- **Minimized environment:** children inherit only
+  PATH/HOME/USER/LOGNAME/TMPDIR/TZ/SSL certs/locale plus
+  `ANTHROPIC_*`/`CLAUDE_*` (operator auth/routing), `TANDEM_*` minus the
+  role; `VIBE_*` config overrides are stripped. `USER`/`LOGNAME` matter
+  beyond cosmetics: claude's macOS credentials live in the login keychain
+  and the CLI resolves them through the user identity (live-verified:
+  without `USER`, every consult died with `auth_expired`).
 - **Privacy:** run logs are metadata-only (kinds, sizes, hashes, error
   metadata - no prompt or answer content). Delegation specs and vibe's
   `export.json` + journal copies stay in the `0700` state dir until the TTL
@@ -227,10 +295,13 @@ uv run pytest -q
 uv run python scripts/smoke_stdio.py            # or SMOKE_ROLE=worker ...
 ```
 
+`.github/workflows/ci.yml` runs the same checks.
+
 Layout: `src/tandem/` (`config`, `state`, `child`, `watchdog`, `proctree`,
 `runlog`, `guard`, `runner/` CLI adapters, `spec` prompt templates,
-`sessions`, `thinker`, `worker`, `server`, `runtime`, `__main__`),
-`tests/unit/` with pinned `tests/fixtures/` for both CLIs' output contracts.
+`sessions`, `errors`, `thinker`, `worker`, `server`, `runtime`,
+`__main__`), `tests/unit/` with pinned `tests/fixtures/` for both CLIs'
+output contracts.
 
 ## Limitations
 
@@ -253,3 +324,7 @@ Layout: `src/tandem/` (`config`, `state`, `child`, `watchdog`, `proctree`,
 - Session continuation (followups) is capped at 24h of inactivity by tandem
   policy (a sliding window refreshed by each followup, not a fixed per-session
   age), not by Claude's own session lifetime.
+
+## License
+
+MIT - see [LICENSE](LICENSE).

@@ -58,6 +58,7 @@ from tandem.guard import child_mode, refusal
 from tandem.runlog import sha256_hex
 from tandem.runner.claude_runner import ClaudeOutcome, build_consult_args, parse_claude_result
 from tandem.runtime import Runtime
+from tandem.server import ensure_cli_versions
 from tandem.sessions import SessionRecord, get_session, upsert_session, valid_session_id
 from tandem.spec import CONSULT_MODES, CONTEXT_CAP_BYTES, compose_consult_prompt, extract_decision
 from tandem.state import file_lock
@@ -226,6 +227,8 @@ async def _consult_once(
     prompt_bytes = prompt.encode("utf-8")
     context_bytes_len = len(context.encode("utf-8"))
 
+    await ensure_cli_versions(rt)
+
     rt.log.event(
         "consult_started",
         run_id=run_id,
@@ -237,6 +240,8 @@ async def _consult_once(
         context_bytes=context_bytes_len,
         context_truncated=context_bytes_len > CONTEXT_CAP_BYTES,
         cwd=str(cwd),
+        claude_version=rt.versions.get("claude"),
+        vibe_version=rt.versions.get("vibe"),
     )
 
     child: ChildResult | None = None

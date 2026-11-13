@@ -3,9 +3,10 @@
 One delegation runs one headless vibe child against an explicit,
 allowlisted, non-world-writable working directory: the task becomes a
 spec file (with a reporting contract) under tandem's private state dir,
-vibe gets ``--output-dir`` under the same private run dir, and two
-``--disabled-tools`` regexes keep the child from reaching any MCP
-server or built-in connector - the loop guard's second ring.  Vibe's
+vibe gets ``--output-dir`` under the same private run dir, and five
+``--disabled-tools`` patterns keep the child from reaching any MCP
+server, connector, or tool-discovery route to them (the live isolation
+probes found the discovery path - see the security model in README).  Vibe's
 own graceful time limit (the vibe-side ``--time-limit`` flag) is set to
 the caller's budget; tandem's hard kill sits on top of it with at least
 30s of headroom.  An optional ``--max-price`` cap (operator env knob)
@@ -16,11 +17,16 @@ Run-dir hygiene: each delegation stages its spec (0600), export.json
 and vibe's journal copy under ``<state>/tasks/delegate-<uuid12>/``,
 swept whole-tree by the TTL at delegation time AND at server startup.
 
-Classification: ``finished`` is success; limit stop_reasons
-(deadline/turn_limit/token_limit/price_limit/length) are honest
-partials reported with ``status: partial`` and not treated as errors;
+Classification (pinned by live vibe 3.1.1 captures): a clean finish
+writes ``stop_reason: null`` (top-level ``outcome: "finished"``) and is
+success; limit stop_reasons are honest partials reported with ``status:
+partial`` and not treated as errors - live verified as
+``interrupted`` (vibe's graceful ``--time-limit`` stop, exit code 3),
+with the researched value set (deadline/turn_limit/token_limit/
+price_limit/length) kept for tolerance;
 ``terminated`` and the error-ish stop_reasons raise; an exit without a
-parseable export.json is ``child_crash``.  A success-shaped export with
+parseable export.json is ``child_crash`` (``timeout`` when tandem's hard
+kill raced the export write).  A success-shaped export with
 a nonzero exit code is not trusted: the child result wins.  A hard kill
 that still left a parseable export keeps the export-wins semantics but
 the payload carries ``timed_out: true`` and a synthetic warning so the
@@ -62,6 +68,7 @@ from tandem.runner.vibe_runner import (
     parse_export,
 )
 from tandem.runtime import Runtime
+from tandem.server import ensure_cli_versions
 from tandem.spec import (
     DELEGATE_CONTEXT_CAP_BYTES,
     DELEGATE_MODES,
@@ -95,7 +102,9 @@ DELEGATE_TOOL_DESCRIPTION = (
     "mode cannot prompt a human for the approval those commands need - use it for edit-only "
     "tasks). The run trusts the repo: its .vibe config and hooks load and execute (operator knob "
     "TANDEM_DELEGATE_TRUST, default on). max_seconds must be 30-3600 (default 600). One "
-    "delegation per call; the answer includes vibe's stop_reason so partial work is visible."
+    "delegation per call; the answer includes status, stop_reason and vibe's outcome marker "
+    "(finished/deadline/...) so partial work is visible and re-runnable (a larger max_seconds, "
+    "or a raised price cap when the price limit fired)."
 )
 DELEGATE_ANNOTATIONS = ToolAnnotations(read_only_hint=False, destructive_hint=True)
 
@@ -230,6 +239,8 @@ async def delegate_impl(
         agent=mode,
         max_price_usd=rt.cfg.delegate_max_price,
     )
+    await ensure_cli_versions(rt)
+
     rt.log.event(
         "delegate_started",
         run_id=run_id,
@@ -243,6 +254,8 @@ async def delegate_impl(
         trust=rt.cfg.delegate_trust,
         max_price_usd=rt.cfg.delegate_max_price,
         result_cap_bytes=rt.cfg.delegate_result_cap_bytes,
+        claude_version=rt.versions.get("claude"),
+        vibe_version=rt.versions.get("vibe"),
     )
 
     child: ChildResult | None = None
@@ -359,6 +372,12 @@ async def _finish_delegation(
         warnings.append(f"unrecognized stop_reason from vibe: {stop}")
     if child.timed_out:
         warnings.append(_TRUNCATED_WARNING)
+    if status == "partial" and child.returncode not in (0, None, 3):
+        # Graceful limit stops exit 0 or 3 (live-verified); anything else on a
+        # limit stop is suspicious but not a lie - surface it loudly.
+        warnings.append(
+            f"vibe left the limit stop with exit code {child.returncode} (graceful limit stops exit 0 or 3)"
+        )
 
     if not report:
         report = (outcome.answer or "").strip()
@@ -414,6 +433,7 @@ async def _finish_delegation(
         "answer": report,
         "status": status,
         "stop_reason": stop,
+        "outcome": outcome.outcome,  # vibe's own kind marker: finished / deadline / ...
         "session_id": outcome.session_id,
         "cost_usd": outcome.cost_usd,
         "warnings": warnings,

@@ -63,6 +63,7 @@ def _runtime(
         counter=RollingCounter(paths.counters_file),
         sessions=SessionRegistry(paths),
         log=RunLog(paths.runs_dir, role=role),
+        versions={"claude": "2.1.321", "vibe": "3.1.1"},  # pre-seeded: no real CLI probes in tests
     )
 
 
@@ -88,11 +89,15 @@ def _child_result(
 
 
 def _success_stdout(cost: float = 0.1245, session_id: str = SID) -> bytes:
+    # cost/SID defaults are injected test data (deliberately not the live
+    # fixture's values); the fixture pins the result-object shape only.
     payload: dict[str, Any] = json.loads((FIXTURES / "claude_print_success.json").read_text())
     payload["total_cost_usd"] = cost
     payload["session_id"] = session_id
     # The fixture pins the result-object shape (a live capture); the answer
-    # text is test data - a decide-mode answer with the DECISION line.
+    # text and turn count are test data - a decide-mode answer with the
+    # DECISION line the persona asks for.
+    payload["num_turns"] = 2
     payload["result"] = f"1. Analysis: wall and happy paths covered by live probes.\n\nDECISION: {DECISION_TEXT}"
     return json.dumps(payload).encode()
 
@@ -135,6 +140,20 @@ def _kind_of(exc: BaseException) -> str:
 # ---------------------------------------------------------------------------
 # Guard, argument validation and cwd trust
 # ---------------------------------------------------------------------------
+
+
+def test_cli_versions_ride_the_first_started_event(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Version drift across a long-lived server (an auto-updated CLI) becomes a
+    # runlog-visible fact: a spawned child's started event carries both CLI
+    # versions from the once-per-process cache (pre-seeded here, so unit
+    # tests never probe the real CLIs).
+    rt = _runtime(tmp_path)
+    _install_fake_child(monkeypatch, _child_result(_success_stdout()))
+    asyncio.run(thinker.consult_impl(rt, question="q"))
+    events = [json.loads(line) for line in rt.log.path.read_text().splitlines()]
+    started = events[0]
+    assert started["claude_version"] == "2.1.321"
+    assert started["vibe_version"] == "3.1.1"
 
 
 def test_guard_refuses_new_consult(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

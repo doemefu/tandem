@@ -1,1 +1,52 @@
-{"vibe_version": "3.1.1", "effective_config": {"agent": "accept-edits", "model": "mistral-large-latest"}, "stop_reason": "finished", "session_id": "c47104a2-77e6-4bd0-a2a7-93f805e70d00", "token_usage": {"input_tokens": 18234, "output_tokens": 4123, "total_tokens": 22357}, "cost_usd": 0.0712, "total_cost_usd": 0.0712, "outcome": {"answer": "Done. Implemented the retry wrapper with exponential backoff and added the three test cases to test_worker.py.\n\nREPORT_STATUS: done\nREPORT_SUMMARY: Retry wrapper implemented and tested.\nFILES_CHANGED: src/retry.py, tests/test_retry.py\nCOMMANDS_RUN: uv run pytest -q\nRESULT_PATHS: src/retry.py, tests/test_retry.py\nREMAINING: none"}, "warnings": []}
+{
+  "outcome": "finished",
+  "stop_reason": null,
+  "error": null,
+  "session_id": "ab30482b-a2c9-75c5-9d8a-ca069f5ece04",
+  "usage": {
+    "input_tokens": 25909,
+    "output_tokens": 1062,
+    "cached_input_tokens": 17280,
+    "total_tokens": 26971
+  },
+  "cost_usd": 0.021246199999999996,
+  "steps": 3,
+  "config": {
+    "active_model": "glm-5-3",
+    "default_agent": "accept-edits",
+    "outside_workdir": "ask",
+    "disabled_tools": [
+      "re:mcp_.*",
+      "re:connector_.*",
+      "search_tool_functions",
+      "re:^(mcp_)?tandem",
+      "re:^(mcp_tandem\\.)?bridge_status",
+      "ask_user_question",
+      "cron"
+    ],
+    "mcp_servers": [
+      {
+        "name": "tandem",
+        "startup_timeout_sec": 30.0,
+        "tool_timeout_sec": 1860.0,
+        "disabled": false,
+        "transport": "stdio"
+      }
+    ],
+    "connectors": [],
+    "enable_mcp": true,
+    "enable_connectors": true
+  },
+  "schema_version": 1,
+  "vibe_version": "3.1.1",
+  "journal_dir": "session",
+  "started_at": "2026-11-12T22:12:13.294500Z",
+  "ended_at": "2026-11-12T22:12:21.976784Z",
+  "limits": {
+    "max_turns": null,
+    "max_price": null,
+    "max_tokens": null,
+    "time_limit_s": 300.0
+  },
+  "exit_code": 0
+}

@@ -1,8 +1,11 @@
 """Vibe adapter: delegate argv construction and export.json parsing.
 
-Both fixtures are synthesized from the documented export.json shape and
-research on vibe 3.1.1 (stop_reason values verified via --help output);
-WP6's live window replaces them with real captures.
+Both fixtures are live vibe 3.1.1 captures (WP6), sanitized: the real
+exports carry a large machine-specific config dump (model catalog,
+providers, account identifiers) that is reduced to the delegation-relevant
+keys. A clean finish writes stop_reason null with outcome "finished";
+the graceful --time-limit stop writes stop_reason "interrupted" with
+outcome "deadline" and exit code 3.
 """
 
 from __future__ import annotations
@@ -13,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from tandem.config import Config
-from tandem.runner.vibe_runner import build_delegate_args, parse_export
+from tandem.runner.vibe_runner import STOP_REASON_LIMITS, build_delegate_args, parse_export
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
 
@@ -39,9 +42,20 @@ def test_build_delegate_args_full_isolation() -> None:
     assert argv[7:9] == ["--time-limit", "600"]
     assert argv[9:11] == ["--agent", "accept-edits"]
     # MCP servers AND built-in connectors are out of reach for a delegated run.
-    assert argv[11:15] == ["--disabled-tools", "re:mcp_.*", "--disabled-tools", "re:connector_.*"]
-    assert argv[15:17] == ["--max-price", "0.5"]
-    assert argv[17:] == ["--trust"]
+    assert argv[11:21] == [
+        "--disabled-tools",
+        "re:mcp_.*",
+        "--disabled-tools",
+        "re:connector_.*",
+        "--disabled-tools",
+        "search_tool_functions",
+        "--disabled-tools",
+        "re:^(mcp_)?tandem",
+        "--disabled-tools",
+        "re:^(mcp_tandem\\.)?bridge_status",
+    ]
+    assert argv[21:23] == ["--max-price", "0.5"]
+    assert argv[23:] == ["--trust"]
     assert "-p" not in argv  # --prompt-file alone enters programmatic mode
 
 
@@ -54,7 +68,7 @@ def test_build_delegate_args_without_trust() -> None:
         max_seconds=90.0,
         agent="smart-approve",
     )
-    assert argv[-1] == "re:connector_.*"
+    assert argv[-1] == "re:^(mcp_tandem\\.)?bridge_status"
     assert "--trust" not in argv
     assert "--max-price" not in argv
     assert argv[7:9] == ["--time-limit", "90"]
@@ -64,18 +78,42 @@ def test_build_delegate_args_without_trust() -> None:
 def test_parse_export_success_fixture() -> None:
     outcome = parse_export(FIXTURES / "vibe_export_success.json")
     assert outcome is not None
-    assert outcome.stop_reason == "finished"
-    assert outcome.session_id == "c47104a2-77e6-4bd0-a2a7-93f805e70d00"
-    assert outcome.cost_usd == pytest.approx(0.0712)
+    assert outcome.stop_reason is None  # clean finish: outcome names it, stop_reason is null
+    assert outcome.session_id == "ab30482b-a2c9-75c5-9d8a-ca069f5ece04"
+    assert outcome.cost_usd == pytest.approx(0.0212462)
     assert outcome.raw is not None
+    assert outcome.raw["outcome"] == "finished"
+    assert outcome.raw["exit_code"] == 0
+    # Isolation-relevant config, pinned from the live post-install capture:
+    # the mounted tandem server visibly present in the child config (vibe's
+    # client starts it), and the seven-entry disabled list: five delegate
+    # patterns + two operator-baseline disables.
+    config = outcome.raw["config"]
+    assert config["disabled_tools"] == [
+        "re:mcp_.*",
+        "re:connector_.*",
+        "search_tool_functions",
+        "re:^(mcp_)?tandem",
+        "re:^(mcp_tandem\\.)?bridge_status",
+        "ask_user_question",
+        "cron",
+    ]
+    assert [s["name"] for s in config["mcp_servers"]] == ["tandem"]
+    assert config["mcp_servers"][0]["tool_timeout_sec"] == 1860.0
+    # Sanitization contract: no operator-identifying content survives.
+    assert "client_key" not in json.dumps(config)
+    assert ".venv/bin/python" not in json.dumps(config)
 
 
 def test_parse_export_deadline_fixture() -> None:
     outcome = parse_export(FIXTURES / "vibe_export_deadline.json")
     assert outcome is not None
-    assert outcome.stop_reason == "deadline"
-    assert outcome.stop_reason not in ("finished",)
-    assert outcome.session_id is not None
+    assert outcome.stop_reason == "interrupted"  # vibe 3.1.1's graceful limit stop
+    assert outcome.stop_reason in STOP_REASON_LIMITS
+    assert outcome.raw is not None
+    assert outcome.raw["outcome"] == "deadline"  # the limit kind lives in outcome
+    assert outcome.raw["exit_code"] == 3  # expected on limit stops, not a crash
+    assert outcome.session_id == "a2970688-94e9-6841-7ef1-1d4b9091e79c"
 
 
 def test_parse_export_missing_file_returns_none(tmp_path: Path) -> None:

@@ -15,6 +15,8 @@ def _base_env(role: str = "thinker") -> dict[str, str]:
         "TANDEM_ROLE": role,
         "PATH": "/usr/bin:/bin",
         "HOME": "/Users/test",
+        "USER": "testuser",
+        "LOGNAME": "testuser",
         "LANG": "de_DE.UTF-8",
         "LC_ALL": "de_DE.UTF-8",
         "VIBE_SESSION": "1",
@@ -77,6 +79,8 @@ def test_build_child_env_filters_and_marks() -> None:
     assert env["TANDEM_CHILD"] == "1"
     assert env["PATH"] == "/usr/bin:/bin"
     assert env["HOME"] == "/Users/test"
+    assert env["USER"] == "testuser"  # claude keychain auth needs the identity (live-verified)
+    assert env["LOGNAME"] == "testuser"
     assert env["LC_ALL"] == "de_DE.UTF-8"
     assert env["TZ"] == "Europe/Zurich"
     assert env["SSL_CERT_FILE"] == "/etc/ca.pem"

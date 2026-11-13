@@ -6,7 +6,9 @@ uses semantic versioning.
 
 ## [Unreleased]
 
-### Added
+## [0.1.0] - 2026-11-12
+
+### Added (v0.1.0 initial release)
 
 - Repository bootstrap (WP1): uv-managed Python 3.13 project with the pinned toolchain
   (ruff, mypy `--strict`, pytest), CI mirroring homelab-mcp-hub (SHA-pinned actions),
@@ -220,3 +222,71 @@ uses semantic versioning.
   consult window imports the counter's own constant instead of duplicating
   86400, and the install-test module doc no longer overclaims that every case
   aborts in validation.
+- Live matrix (WP6): `USER`/`LOGNAME` pass through to CLI children - claude's
+  macOS credentials live in the login keychain and the CLI resolves them via
+  the user identity; without `USER` every consult died with `auth_expired`
+  (bisected live: TERM, SSH_AUTH_SOCK, XPC_*, LOGNAME alone all
+  insufficient). A full live consult through the thinker pipeline returns
+  a DECISION answer, session id and cost delta; a full live delegation
+  through the worker pipeline completes a real task in an allowlisted
+  workdir (REPORT contract honored by vibe, export + journal captured,
+  `re:mcp_.*`/`re:connector_.*` isolation verified in the child export).
+  All four result-JSON fixtures are now live captures - this WP replaced
+  three (claude success + both vibe exports; the quota-wall capture has
+  been live since WP1). The vibe exports are sanitized of the
+  machine/account noise in their config dump; the claude captures keep
+  their raw shape with operator credential metadata redacted (placeholder
+  token-expiry timestamp, reset timezone removed from the quota message).
+  The live runs exposed the real vibe 3.1.1 export schema: a clean finish
+  is top-level `outcome: "finished"` with `stop_reason: null`; the graceful
+  `--time-limit` stop is `outcome: "deadline"`, `stop_reason:
+  "interrupted"` and exit code 3 with "Stopped: <limit>" on stderr.
+  `interrupted` is now classified in the limit family (`status: partial`,
+  the exit-3 expected, regression-tested as such); the delegated result
+  payload exposes vibe's `outcome` marker so callers can tell which limit
+  fired. Report-on-stdout with export-side defense kept; the answer
+  fallback path stays covered by an inline test shape.
+- Review fold (WP6): a limit stop whose exit code is neither of the
+  graceful exits (0/3) now surfaces a loud warning instead of passing
+  silently (live-verified: only 0/3 occur on graceful stops); the
+  `child_crash` taxonomy wording gains the hard-kill/`timeout`
+  precedence everywhere it is stated; README documents the tolerated
+  success-family stop value (`finished`); the delegate tool description
+  states the re-run levers precisely (larger max_seconds, raised price
+  cap when the price limit fired); test identity values genericized;
+  fixture provenance and review findings folded (two reviewer passes:
+  contract-exactness and independent live verification, both approving
+  with findings now applied).
+- Review fold (WP6, GitHub review round 2), the isolation probe that
+  changed the security model: a delegated child on the fully mounted
+  machine REACHED the nested thinker server - `--disabled-tools re:mcp_.*`
+  does not strip vibe 3.1.1's `tools.mcp_tandem.*` naming on its own, the
+  child invoked through `search_tool_functions` tool discovery, and one
+  real paid consult ran inside the nested server (confined all along by
+  the mount's cwd allowlist - seven `invalid_cwd` refusals - and billed to
+  the same rolling budget). `TANDEM_CHILD` does not survive the extra hop
+  (vibe does not forward a tandem-spawned child's env to its MCP servers),
+  so the env ring holds exactly one level deep. Delegated children now also
+  disable `search_tool_functions` and the tandem tool names explicitly
+  (five `--disabled-tools` patterns); the post-hardening live probe ends
+  `REPORT_STATUS: blocked` with the nested server spawned but NO tool call
+  landing on it, and the README security model now states the rings as
+  live-verified rather than aspirational (the load-bearing controls are the
+  cwd allowlist and the consult budget). CLI version recording, live:
+  `ensure_cli_versions` probes both CLIs once per server process at the
+  first child spawn (never at startup - the host's startup timeout owns
+  that window) and the versions ride the first `consult_started` /
+  `delegate_started` event, shared with `bridge_status`'s cache - the
+  cache pins each process's day-one versions, so the claude 2.1.321 ->
+  2.1.322 auto-update showed in that first-started event, and the
+  model-routing drift (configured `glm-5-3` absent, fallback to the routed
+  Mistral config) showed up in the runlog and the child export's config
+  dump. The success export fixture was re-captured live post-install (the
+  child config now shows the mounted `tandem` server with the pinned
+  timeouts) and then REDUCED to the delegation-relevant config keys like
+  its sibling - the raw capture carried an operator client key, the
+  session-log save dir and the mount command path, none of which the
+  parser reads and none of which belong in a committed fixture; the
+  deadline fixture predates both the install and the hardened strip -
+  kept as the deadline shape only), and both session-id /
+  cost pins moved to the fresh capture.

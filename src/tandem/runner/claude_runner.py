@@ -1,7 +1,7 @@
 """Claude Code adapter: consult argv and tolerant ``-p --output-format json`` parsing.
 
-The JSON shape is pinned by committed fixtures (a live capture on the
-quota wall, plus a synthesized success fixture).  Parsing never raises:
+The JSON shape is pinned by committed fixtures, both live captures
+(one from the quota wall, one success).  Parsing never raises:
 Claude writes human-oriented lines to stdout sometimes (update notices,
 warnings), so the parser first tries whole-stdout JSON, then scans lines
 in reverse for the last object with ``"type": "result"``.  Files here

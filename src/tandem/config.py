@@ -21,8 +21,11 @@ _TRUE = frozenset(("1", "true", "yes", "on"))
 _FALSE = frozenset(("0", "false", "no", "off"))
 _MIB = 1024 * 1024
 
-# Exact variables passed through to children.
-_ENV_EXACT = ("PATH", "HOME", "TMPDIR", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR")
+# Exact variables passed through to children. USER/LOGNAME are identity
+# variables the OS keychain needs: claude resolves its stored credentials
+# per-user and treats a USER-less environment as not logged in (verified
+# live on macOS).
+_ENV_EXACT = ("PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR")
 # Variable prefixes passed through to children. ANTHROPIC_/CLAUDE_ keep
 # operator-chosen routing and auth (API-key gateways, Bedrock/Vertex toggles)
 # intact - the env is machine-scoped operator config, not caller input.

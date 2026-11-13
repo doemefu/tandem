@@ -1,1 +1,41 @@
-{"vibe_version": "3.1.1", "effective_config": {"agent": "accept-edits", "model": "mistral-large-latest"}, "stop_reason": "deadline", "session_id": "d3adbeef-77e6-4bd0-a2a7-93f805e70d01", "token_usage": {"input_tokens": 9001, "output_tokens": 8700, "total_tokens": 17701}, "cost_usd": 0.0410, "total_cost_usd": 0.0410, "outcome": {"answer": "The retry wrapper landed and its tests pass; the migration half of the task is still open.\n\nREPORT_STATUS: partial\nREPORT_SUMMARY: Retry wrapper done, migration not started.\nFILES_CHANGED: src/retry.py\nCOMMANDS_RUN: uv run pytest -q\nRESULT_PATHS: src/retry.py\nREMAINING: the alembic migration for the new column"}, "warnings": []}
+{
+  "outcome": "deadline",
+  "stop_reason": "interrupted",
+  "error": null,
+  "session_id": "a2970688-94e9-6841-7ef1-1d4b9091e79c",
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cached_input_tokens": 0,
+    "total_tokens": 0
+  },
+  "cost_usd": 0.0,
+  "steps": 1,
+  "schema_version": 1,
+  "vibe_version": "3.1.1",
+  "journal_dir": "session",
+  "started_at": "2026-11-11T22:20:04.175221Z",
+  "ended_at": "2026-11-11T22:20:34.534375Z",
+  "limits": {
+    "max_turns": null,
+    "max_price": null,
+    "max_tokens": null,
+    "time_limit_s": 30.0
+  },
+  "exit_code": 3,
+  "config": {
+    "active_model": "glm-5-3",
+    "default_agent": "accept-edits",
+    "outside_workdir": "ask",
+    "disabled_tools": [
+      "re:mcp_.*",
+      "re:connector_.*",
+      "ask_user_question",
+      "cron"
+    ],
+    "mcp_servers": [],
+    "connectors": [],
+    "enable_mcp": true,
+    "enable_connectors": true
+  }
+}

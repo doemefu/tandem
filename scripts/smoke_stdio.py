@@ -6,7 +6,7 @@ tools exposed by the role, calls bridge_status and prints the JSON payload.
 
 Usage:
     uv run python scripts/smoke_stdio.py            # default role: thinker
-    TANDEM_ROLE=worker uv run python scripts/smoke_stdio.py
+    SMOKE_ROLE=worker uv run python scripts/smoke_stdio.py
 
 Exit code 0 means: handshake ok, exactly the expected tool set registered,
 bridge_status answered without error. Any deviation exits non-zero.
